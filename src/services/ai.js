@@ -28,6 +28,7 @@ const { resolveReminderDecision, isRecallQuestion } = require('../utils/reminder
 const YOUTUBE_TRANSCRIPT_TIMEOUT_MS = 25000;
 const TAVILY_EXTRACT_TIMEOUT_MS = 12000;
 const TAVILY_SEARCH_TIMEOUT_MS = 20000;
+const VOICE_TRANSCRIPTION_TIMEOUT_MS = 60000;
 const VOICE_SUMMARY_TIMEOUT_MS = 20000;
 
 class AiService {
@@ -756,13 +757,29 @@ async generateFlavorText(task, result) {
         return null;
     }
 
+    const deadline = Date.now() + VOICE_TRANSCRIPTION_TIMEOUT_MS;
     try {
-        const text = await this.executeNativeWithRetry(async () => {
-          const parts = [ { inlineData: { mimeType: mimeType, data: audioBuffer.toString("base64") } }, { text: prompts.transcription(userName) }];
-          const result = await this.transcriptionModel.generateContent(parts, { timeout: 60000 });
-          return readTranscript(result.response.text());
-        });
-        return { text };
+        const parts = [ { inlineData: { mimeType: mimeType, data: audioBuffer.toString("base64") } }, { text: prompts.transcription(userName) }];
+        return await withTimeout((async () => {
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              const text = await this.executeNativeWithRetry(async () => {
+                const remainingMs = deadline - Date.now();
+                if (remainingMs <= 0) throw new Error('Истёк срок расшифровки голосового');
+                const result = await this.transcriptionModel.generateContent(parts, { timeout: remainingMs });
+                return readTranscript(result.response.text());
+              });
+              return { text };
+            } catch (error) {
+              const status = Number(error.status) || Number(String(error.message).match(/\b(500|502|503|504)\b/)?.[1]);
+              const delayMs = 1000 * (2 ** attempt);
+              if (![500, 502, 503, 504].includes(status) || attempt === 2 || Date.now() + delayMs >= deadline) throw error;
+              // A service outage does not mean the API key has exhausted its quota.
+              console.warn(`[TRANSCRIPTION RETRY] HTTP ${status}; попытка ${attempt + 2}/3 через ${delayMs} мс`);
+              await new Promise(resolve => setTimeout(resolve, delayMs));
+            }
+          }
+        })(), VOICE_TRANSCRIPTION_TIMEOUT_MS, 'Расшифровка голосового');
     } catch (e) {
         console.error(`[TRANSCRIPTION FAIL] ${e.message}`);
         return null;

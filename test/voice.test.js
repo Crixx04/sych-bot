@@ -19,8 +19,9 @@ function loadModule(file, dependencies, globals = {}) {
   return module.exports;
 }
 
-function loadAi({ transcript = 'Уточни адрес, пожалуйста.', summary = 'Краткий ответ.', reviewedSummary, summaryError, reviewError, rawTranscript, rawSummary, stall = false, reviewStall = false, quotaOnce = false, keys = ['test-key'], api = true } = {}) {
-  const calls = [], models = [];
+function loadAi({ transcript = 'Уточни адрес, пожалуйста.', summary = 'Краткий ответ.', reviewedSummary, summaryError, reviewError, rawTranscript, rawSummary, stall = false, reviewStall = false, quotaOnce = false, keys = ['test-key'], api = true, transcriptionErrors = [], transcriptionDurations = [], transcriptionStall = false } = {}) {
+  const calls = [], models = [], delays = [], exhaustedKeys = [];
+  let now = 0;
   const config = { geminiKeys: keys, googleNativeModel: 'test-voice-model', mainModel: 'test-main-model', aiKey: api ? 'test' : '' };
   const prompts = loadModule('core/prompts.js', { '../config': config });
   class FakeGoogle {
@@ -30,6 +31,12 @@ function loadAi({ transcript = 'Уточни адрес, пожалуйста.',
       const field = options.generationConfig?.responseSchema?.required[0];
       return { generateContent: async (input, requestOptions) => {
         calls.push({ field, input, requestOptions, key: this.key });
+        if (field === 'text') {
+          const index = calls.filter(call => call.field === 'text').length - 1;
+          now += transcriptionDurations[index] || 0;
+          if (transcriptionStall) return new Promise(() => {});
+          if (transcriptionErrors[index]) throw transcriptionErrors[index];
+        }
         if (quotaOnce && calls.length === 1) throw new Error('429 quota exceeded');
         if (field === 'summary') {
           if (stall) return new Promise(() => {});
@@ -58,13 +65,16 @@ function loadAi({ transcript = 'Уточни адрес, пожалуйста.',
   const ai = loadModule('services/ai.js', {
     '@google/generative-ai': { GoogleGenerativeAI: FakeGoogle, HarmCategory: {}, HarmBlockThreshold: {} },
     '../config': config, '../core/prompts': prompts, axios: {}, openai: FakeOpenAI, '@tavily/core': {},
-    './storage': { initGoogleStats() {}, incrementGoogleStat() {}, markGoogleKeyExhausted() {}, incrementStat() {} },
+    './storage': { initGoogleStats() {}, incrementGoogleStat() {}, markGoogleKeyExhausted(index) { exhaustedKeys.push(index); }, incrementStat() {} },
     '../utils/rich': {}, './youtube': {}, './youtube-gemini': {}, '../utils/content-policy': {}, './research': {},
     '../utils/voice': voice,
     '../utils/reminders': require('../src/utils/reminders'),
-    '../utils/async': { withTimeout: (operation, timeout, label) => withTimeout(operation, stall || reviewStall ? 15 : timeout, label) },
+    '../utils/async': { withTimeout: (operation, timeout, label) => withTimeout(operation, stall || reviewStall || transcriptionStall ? 15 : timeout, label) },
+  }, {
+    Date: class extends Date { static now() { return now; } },
+    setTimeout(callback, ms) { delays.push(ms); now += ms; callback(); return 0; },
   });
-  return { ai, calls, models };
+  return { ai, calls, models, delays, exhaustedKeys };
 }
 
 const longTranscript = 'Если заберу машину, возможно, приеду завтра к 19:00. Иначе в субботу. Уточни адрес. '
@@ -153,6 +163,65 @@ test('quota rotation recreates the dedicated voice model on the next key', async
   const result = await ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg');
   assert.ok(result.text);
   assert.deepEqual(calls.map(call => [call.field, call.key]), [['text', 'key-one'], ['text', 'key-two']]);
+});
+
+test('temporary Google failures recover after backoff without exhausting or rotating a key', async () => {
+  for (const status of [500, 502, 503, 504]) {
+    const { ai, calls, delays, exhaustedKeys } = loadAi({ transcriptionErrors: [Object.assign(new Error('service unavailable'), { status })] });
+    const result = await ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg');
+    assert.equal(result.text, 'Уточни адрес, пожалуйста.');
+    assert.deepEqual(delays, [1000]);
+    assert.deepEqual(exhaustedKeys, []);
+    assert.deepEqual(calls.map(call => call.key), ['test-key', 'test-key']);
+    assert.equal(calls[0].requestOptions.timeout, 60000);
+    assert.equal(calls[1].requestOptions.timeout, 59000);
+    assert.equal(calls[1].input[0].inlineData.data, calls[0].input[0].inlineData.data);
+  }
+});
+
+test('persistent 503 failures stop after the initial request and two retries', async () => {
+  const error = new Error('[GoogleGenerativeAI Error]: [503 Service Unavailable] high demand');
+  const { ai, calls, delays, exhaustedKeys } = loadAi({ transcriptionErrors: [error, error, error] });
+  assert.equal(await ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg'), null);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(delays, [1000, 2000]);
+  assert.deepEqual(calls.map(call => call.requestOptions.timeout), [60000, 59000, 57000]);
+  assert.deepEqual(exhaustedKeys, []);
+});
+
+test('a third transcription attempt can recover and quota rotation still works before a temporary outage', async () => {
+  const error = Object.assign(new Error('unavailable'), { status: 503 });
+  const third = loadAi({ transcriptionErrors: [error, error] });
+  assert.ok((await third.ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg')).text);
+  assert.equal(third.calls.length, 3);
+  const rotated = loadAi({ quotaOnce: true, keys: ['key-one', 'key-two'], transcriptionErrors: [null, error] });
+  assert.ok((await rotated.ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg')).text);
+  assert.deepEqual(rotated.calls.map(call => call.key), ['key-one', 'key-two', 'key-two']);
+  assert.deepEqual(rotated.exhaustedKeys, [0]);
+  assert.deepEqual(rotated.delays, [1000]);
+});
+
+test('invalid audio requests are not retried', async () => {
+  const { ai, calls, delays } = loadAi({ transcriptionErrors: [Object.assign(new Error('invalid audio'), { status: 400 })] });
+  assert.equal(await ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg'), null);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(delays, []);
+});
+
+test('transcription retries share one deadline and stop when another backoff would exceed it', async () => {
+  const error = Object.assign(new Error('unavailable'), { status: 503 });
+  const { ai, calls, delays } = loadAi({ transcriptionErrors: [error, error], transcriptionDurations: [30000, 27001] });
+  assert.equal(await ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg'), null);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(delays, [1000]);
+  assert.equal(calls[1].requestOptions.timeout, 29000);
+});
+
+test('stalled speech recognition returns within its deadline', async () => {
+  const { ai, calls, delays } = loadAi({ transcriptionStall: true });
+  assert.equal(await ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg'), null);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(delays, []);
 });
 
 test('missing or invalid transcripts never produce invented summaries', async () => {
