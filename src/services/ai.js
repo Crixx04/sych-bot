@@ -20,7 +20,7 @@ const {
   requestYoutubeGeminiAnalysis,
 } = require('./youtube-gemini');
 const { shouldSkipSearchForPrimarySource, isVerificationRequest } = require('../utils/content-policy');
-const { research, evidenceContext, publicUrl, answerAuditPrompt, hasOnlyEvidenceLinks, conservativeAnswer, citedProviderSources } = require('./research');
+const { research, evidenceContext, publicUrl, answerAuditPrompt, conservativeAnswer, citedProviderSources } = require('./research');
 const { withTimeout } = require('../utils/async');
 const { parseVoiceJson, readTranscript, shouldSummarizeVoice, selectVoiceSummary } = require('../utils/voice');
 const { resolveReminderDecision, isRecallQuestion } = require('../utils/reminders');
@@ -336,9 +336,8 @@ async finalizeResearchedAnswer(answer, result) {
   if (!result.claims.length) return conservativeAnswer(result);
   try {
     const audit = await withTimeout(this.reviewEvidence(answerAuditPrompt(answer, result)), 16000, 'Проверка готового ответа');
-    if (audit?.approved === true && hasOnlyEvidenceLinks(answer, result)) return answer;
-    if (audit?.approved === false && typeof audit.answer === 'string' && audit.answer.trim()
-      && hasOnlyEvidenceLinks(audit.answer, result)) return audit.answer.trim();
+    if (audit?.approved === true) return answer;
+    if (audit?.approved === false && typeof audit.answer === 'string' && audit.answer.trim()) return audit.answer.trim();
   } catch (error) { console.error(`[ANSWER AUDIT FAIL] ${error.message}`); }
   // Failure of the verifier must not release an unchecked confident draft.
   return conservativeAnswer(result);

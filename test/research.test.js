@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { pageExcerpt, publicUrl, normalizeSources, validateReview, research, evidenceContext, hasOnlyEvidenceLinks, conservativeAnswer, citedProviderSources } = require('../src/services/research');
+const { pageExcerpt, publicUrl, normalizeSources, validateReview, research, evidenceContext, conservativeAnswer, citedProviderSources } = require('../src/services/research');
 
 const page = '# Claude.ai\nSupported countries: Kazakhstan, Armenia, Georgia.\nPayments depend on the card issuer.';
 const source = { id: 'S1', url: 'https://example.org/countries', title: 'Supported countries', pageText: page, level: 'page' };
@@ -99,13 +99,6 @@ test('images are exposed only when explicitly requested', async () => {
     });
     assert.equal(result.imageUrls.length, includeImages ? 1 : 0);
   }
-});
-
-test('citation validation handles parentheses and rejects foreign URLs', () => {
-  const result = { claims: [{ url: 'https://example.org/Policy_(service)' }] };
-  assert.equal(hasOnlyEvidenceLinks('[Policy](https://example.org/Policy_(service))', result), true);
-  assert.equal(hasOnlyEvidenceLinks('[Policy](https://unrelated.org/Policy_(service))', result), false);
-  assert.equal(hasOnlyEvidenceLinks('Trust me, no citation.', result), false);
 });
 
 test('failed auditing never publishes intermediate model conclusions', () => {

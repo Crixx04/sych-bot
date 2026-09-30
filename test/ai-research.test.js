@@ -93,13 +93,45 @@ test('search outage reaches both writers as missing evidence, never silently as 
   assert.equal(calls.length, 0);
 });
 
-test('answer audit rejects invented URLs and never releases an unchecked draft on failure', async () => {
+test('approved researched answers can link to any domain outside the source-page URLs', async () => {
+  const { ai } = harness();
+  const result = { claims: [{ claim: 'A source reports the project.', status: 'supported', url: 'https://example.org/article' }], gaps: [], errors: [] };
+  ai.reviewEvidence = async () => ({ approved: true });
+  for (const url of ['https://t.me/abstractDL', 'https://news.example.net/report', 'https://downloads.example.net/release.zip', 'https://another.example.com/Policy_(service)?version=2#section']) {
+    const answer = `Вот найденная ссылка: [Открыть](${url}).`;
+    assert.equal(await ai.finalizeResearchedAnswer(answer, result), answer);
+  }
+});
+
+test('Ouroboros Telegram link survives review when its proof is on a different page', async () => {
+  const { ai } = harness();
+  const result = { question: 'сыч кто урабороса сделал дай ссылку на телегу', claims: [{
+    claim: 'Telegram-канал автора проекта Антона Разжигаева — https://t.me/abstractDL.',
+    status: 'supported', sourceId: 'S1', url: 'https://habr.com/ru/companies/airi/articles/1065428',
+    quote: 'мой Telegram-канал: <https://t.me/abstractDL>',
+  }], gaps: [], errors: [] };
+  ai.reviewEvidence = async () => ({ approved: true, issues: [], answer: '' });
+  const answer = 'Канал Антона Разжигаева: [@abstractDL](https://t.me/abstractDL).';
+  assert.equal(await ai.finalizeResearchedAnswer(answer, result), answer);
+});
+
+test('answer audit can return a repaired answer with links outside source-page URLs', async () => {
+  const { ai } = harness();
+  const result = { claims: [{ claim: 'A source identifies the author channel.', status: 'supported', url: 'https://example.org/article' }], gaps: [], errors: [] };
+  const repaired = 'Вот канал автора: [Открыть](https://t.me/abstractDL).';
+  ai.reviewEvidence = async () => ({ approved: false, answer: repaired });
+  assert.equal(await ai.finalizeResearchedAnswer('Wrong draft.', result), repaired);
+});
+
+test('failed or invalid answer auditing never releases an unchecked draft', async () => {
   const { ai } = harness();
   const result = { claims: [{ claim: 'Kazakhstan supported.', status: 'supported', url: 'https://example.org/countries' }], gaps: [], errors: [] };
-  ai.reviewEvidence = async () => ({ approved: true });
-  assert.match(await ai.finalizeResearchedAnswer('Definitely true [proof](https://invented.example.com)', result), /Проверку ответа завершить не удалось/);
   ai.reviewEvidence = async () => { throw Error('audit offline'); };
   assert.match(await ai.finalizeResearchedAnswer('Definitely banned!', result), /Проверку ответа завершить не удалось/);
+  for (const audit of [null, {}, { approved: false, answer: '' }, { approved: 'true' }]) {
+    ai.reviewEvidence = async () => audit;
+    assert.match(await ai.finalizeResearchedAnswer('Definitely banned!', result), /Проверку ответа завершить не удалось/);
+  }
   ai.reviewEvidence = async () => ({ approved: false, answer: 'Один [пост](https://example.org/countries) — ещё не доказательство.' });
   assert.equal(await ai.finalizeResearchedAnswer('Definitely banned!', result), 'Один [пост](https://example.org/countries) — ещё не доказательство.');
 });
