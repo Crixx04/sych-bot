@@ -29,7 +29,9 @@ const YOUTUBE_TRANSCRIPT_TIMEOUT_MS = 25000;
 const TAVILY_EXTRACT_TIMEOUT_MS = 12000;
 const TAVILY_SEARCH_TIMEOUT_MS = 20000;
 const VOICE_TRANSCRIPTION_TIMEOUT_MS = 60000;
-const VOICE_SUMMARY_TIMEOUT_MS = 20000;
+const VOICE_PRIMARY_ATTEMPT_TIMEOUT_MS = 15000;
+const VOICE_FALLBACK_RESERVE_MS = 30000;
+const VOICE_SUMMARY_TIMEOUT_MS = 45000;
 
 class AiService {
   constructor() {
@@ -156,8 +158,8 @@ ${googleRows}
     });
 
     // Speech recognition stays neutral and separate from the summary writer.
-    const voiceModel = (systemInstruction, field) => genAI.getGenerativeModel({
-        model: config.googleNativeModel,
+    const voiceModel = (systemInstruction, field, model = config.googleNativeModel) => genAI.getGenerativeModel({
+        model,
         systemInstruction,
         safetySettings,
         generationConfig: {
@@ -171,6 +173,8 @@ ${googleRows}
         },
     });
     this.transcriptionModel = voiceModel(prompts.voiceTranscriptionSystem(), 'text');
+    this.transcriptionFallbackModel = config.voiceFallbackModel && config.voiceFallbackModel !== config.googleNativeModel
+        ? voiceModel(prompts.voiceTranscriptionSystem(), 'text', config.voiceFallbackModel) : null;
   }
 
   rotateNativeKey() {
@@ -758,25 +762,51 @@ async generateFlavorText(task, result) {
     }
 
     const deadline = Date.now() + VOICE_TRANSCRIPTION_TIMEOUT_MS;
+    // Leave time for a different model when repeated requests hit an overloaded primary.
+    const primaryDeadline = deadline - (this.transcriptionFallbackModel ? VOICE_FALLBACK_RESERVE_MS : 0);
     try {
         const parts = [ { inlineData: { mimeType: mimeType, data: audioBuffer.toString("base64") } }, { text: prompts.transcription(userName) }];
         return await withTimeout((async () => {
+          let lastError;
           for (let attempt = 0; attempt < 3; attempt++) {
             try {
               const text = await this.executeNativeWithRetry(async () => {
-                const remainingMs = deadline - Date.now();
-                if (remainingMs <= 0) throw new Error('Истёк срок расшифровки голосового');
-                const result = await this.transcriptionModel.generateContent(parts, { timeout: remainingMs });
+                const remainingMs = primaryDeadline - Date.now();
+                if (remainingMs <= 0) throw Object.assign(new Error('Истёк срок основной модели расшифровки'), { code: 'ETIMEDOUT' });
+                const timeoutMs = Math.min(VOICE_PRIMARY_ATTEMPT_TIMEOUT_MS, remainingMs);
+                const result = await withTimeout(this.transcriptionModel.generateContent(parts, { timeout: timeoutMs }), timeoutMs, 'Основная модель расшифровки');
                 return readTranscript(result.response.text());
               });
               return { text };
             } catch (error) {
               const status = Number(error.status) || Number(String(error.message).match(/\b(500|502|503|504)\b/)?.[1]);
+              const timedOut = error.code === 'ETIMEDOUT' || error.name === 'AbortError'
+                  || error.constructor?.name === 'GoogleGenerativeAIAbortError';
               const delayMs = 1000 * (2 ** attempt);
-              if (![500, 502, 503, 504].includes(status) || attempt === 2 || Date.now() + delayMs >= deadline) throw error;
+              if (![500, 502, 503, 504].includes(status) && !timedOut) throw error;
+              lastError = error;
+              if (attempt === 2 || Date.now() + delayMs >= primaryDeadline) break;
               // A service outage does not mean the API key has exhausted its quota.
-              console.warn(`[TRANSCRIPTION RETRY] HTTP ${status}; попытка ${attempt + 2}/3 через ${delayMs} мс`);
+              console.warn(`[TRANSCRIPTION RETRY] ${timedOut ? 'timeout' : `HTTP ${status}`}; попытка ${attempt + 2}/3 через ${delayMs} мс`);
               await new Promise(resolve => setTimeout(resolve, delayMs));
+            }
+          }
+          if (!this.transcriptionFallbackModel || Date.now() >= deadline) throw lastError;
+          console.warn(`[TRANSCRIPTION FALLBACK] ${config.voiceFallbackModel}; осталось ${deadline - Date.now()} мс`);
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              const text = await this.executeNativeWithRetry(async () => {
+                const remainingMs = deadline - Date.now();
+                if (remainingMs <= 0) throw new Error('Истёк срок резервной модели расшифровки');
+                const result = await withTimeout(this.transcriptionFallbackModel.generateContent(parts, { timeout: remainingMs }), remainingMs, 'Резервная модель расшифровки');
+                return readTranscript(result.response.text());
+              });
+              return { text };
+            } catch (error) {
+              const status = Number(error.status) || Number(String(error.message).match(/\b(500|502|503|504)\b/)?.[1]);
+              if (![500, 502, 503, 504].includes(status) || attempt === 1 || Date.now() + 1000 >= deadline) throw error;
+              console.warn(`[TRANSCRIPTION RETRY] резерв ${config.voiceFallbackModel}, HTTP ${status}; попытка 2/2 через 1000 мс`);
+              await new Promise(resolve => setTimeout(resolve, 1000));
             }
           }
         })(), VOICE_TRANSCRIPTION_TIMEOUT_MS, 'Расшифровка голосового');
@@ -792,7 +822,8 @@ async generateFlavorText(task, result) {
       console.warn('[VOICE SUMMARY FAIL] Основная модель недоступна: не настроен API');
       return '';
     }
-    const deadline = Date.now() + VOICE_SUMMARY_TIMEOUT_MS;
+    const timeoutMs = config.voiceSummaryTimeoutMs || VOICE_SUMMARY_TIMEOUT_MS;
+    const deadline = Date.now() + timeoutMs;
     try {
       const request = async (system, input, temperature) => {
         const remainingMs = deadline - Date.now();
@@ -816,7 +847,7 @@ async generateFlavorText(task, result) {
         const selected = selectVoiceSummary(text, summary);
         if (!selected) console.warn(`[VOICE SUMMARY REJECT] Проверенный ответ пустой или превышает лимит (${summary.length} символов)`);
         return selected;
-      })(), VOICE_SUMMARY_TIMEOUT_MS, 'Саммари голосового');
+      })(), timeoutMs, 'Саммари голосового');
     } catch (error) {
       // The transcript is already usable; a failed optional summary must not lose it.
       console.error(`[VOICE SUMMARY FAIL] ${error.message}`);

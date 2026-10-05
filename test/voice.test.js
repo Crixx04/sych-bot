@@ -19,10 +19,10 @@ function loadModule(file, dependencies, globals = {}) {
   return module.exports;
 }
 
-function loadAi({ transcript = 'Уточни адрес, пожалуйста.', summary = 'Краткий ответ.', reviewedSummary, summaryError, reviewError, rawTranscript, rawSummary, stall = false, reviewStall = false, quotaOnce = false, keys = ['test-key'], api = true, transcriptionErrors = [], transcriptionDurations = [], transcriptionStall = false } = {}) {
+function loadAi({ transcript = 'Уточни адрес, пожалуйста.', summary = 'Краткий ответ.', reviewedSummary, summaryError, reviewError, rawTranscript, rawSummary, stall = false, reviewStall = false, quotaOnce = false, keys = ['test-key'], api = true, transcriptionErrors = [], transcriptionDurations = [], transcriptionStall = false, summaryDurations = [], summaryTimeoutMs } = {}) {
   const calls = [], models = [], delays = [], exhaustedKeys = [];
   let now = 0;
-  const config = { geminiKeys: keys, googleNativeModel: 'test-voice-model', mainModel: 'test-main-model', aiKey: api ? 'test' : '' };
+  const config = { geminiKeys: keys, googleNativeModel: 'test-voice-model', voiceFallbackModel: 'test-voice-fallback', mainModel: 'test-main-model', aiKey: api ? 'test' : '', voiceSummaryTimeoutMs: summaryTimeoutMs };
   const prompts = loadModule('core/prompts.js', { '../config': config });
   class FakeGoogle {
     constructor(key) { this.key = key; }
@@ -30,7 +30,7 @@ function loadAi({ transcript = 'Уточни адрес, пожалуйста.',
       models.push(options);
       const field = options.generationConfig?.responseSchema?.required[0];
       return { generateContent: async (input, requestOptions) => {
-        calls.push({ field, input, requestOptions, key: this.key });
+        calls.push({ field, input, requestOptions, key: this.key, model: options.model });
         if (field === 'text') {
           const index = calls.filter(call => call.field === 'text').length - 1;
           now += transcriptionDurations[index] || 0;
@@ -54,6 +54,12 @@ function loadAi({ transcript = 'Уточни адрес, пожалуйста.',
       this.chat = { completions: { create: async (options, requestOptions) => {
         const review = ++requests > 1;
         calls.push({ field: review ? 'review' : 'summary', input: options.messages[1].content, options, requestOptions });
+        const duration = summaryDurations[requests - 1] || 0;
+        if (duration >= requestOptions.timeout) {
+          now += requestOptions.timeout;
+          throw Object.assign(new Error('summary request timed out'), { code: 'ETIMEDOUT' });
+        }
+        now += duration;
         if (stall || (review && reviewStall)) return new Promise(() => {});
         if (summaryError) throw summaryError;
         if (review && reviewError) throw reviewError;
@@ -69,7 +75,14 @@ function loadAi({ transcript = 'Уточни адрес, пожалуйста.',
     '../utils/rich': {}, './youtube': {}, './youtube-gemini': {}, '../utils/content-policy': {}, './research': {},
     '../utils/voice': voice,
     '../utils/reminders': require('../src/utils/reminders'),
-    '../utils/async': { withTimeout: (operation, timeout, label) => withTimeout(operation, stall || reviewStall || transcriptionStall ? 15 : timeout, label) },
+    '../utils/async': { withTimeout: (operation, timeout, label) => {
+      const deadlineGuard = label === 'Расшифровка голосового';
+      const testTimeout = transcriptionStall ? (deadlineGuard ? 1000 : 5) : (stall || reviewStall ? 15 : timeout);
+      return withTimeout(operation, testTimeout, label).catch(error => {
+        if (transcriptionStall && !deadlineGuard && error.code === 'ETIMEDOUT') now += timeout;
+        throw error;
+      });
+    } },
   }, {
     Date: class extends Date { static now() { return now; } },
     setTimeout(callback, ms) { delays.push(ms); now += ms; callback(); return 0; },
@@ -112,7 +125,7 @@ test('long voice gets a separate text-only summary request using the complete tr
   assert.equal(calls[1].field, 'summary');
   assert.equal(typeof calls[1].input, 'string');
   assert.ok(calls[1].input.includes(JSON.stringify(result.text)));
-  assert.ok(calls[1].requestOptions.timeout <= 20000);
+  assert.ok(calls[1].requestOptions.timeout <= 45000);
   assert.equal(calls[1].options.model, 'test-main-model');
   assert.equal(calls[1].requestOptions.maxRetries, 0);
   assert.equal(calls[1].options.tools, undefined);
@@ -121,6 +134,23 @@ test('long voice gets a separate text-only summary request using the complete tr
   assert.equal(JSON.parse(calls[2].input).transcript, result.text);
   assert.equal(calls[2].options.model, 'test-main-model');
   assert.ok(calls[2].requestOptions.timeout <= calls[1].requestOptions.timeout);
+});
+
+test('captured slow summary keeps a reviewed result after a 17-second draft and 6-second review', async () => {
+  const { ai, calls } = loadAi({ summary: usefulSummary, summaryDurations: [17000, 6000] });
+  assert.equal(await ai.summarizeVoiceTranscript(longTranscript), usefulSummary);
+  assert.deepEqual(calls.map(call => call.requestOptions.timeout), [45000, 28000]);
+  assert.ok(calls.every(call => call.requestOptions.maxRetries === 0));
+});
+
+test('summary stages share the configured budget and never publish a draft on review timeout', async () => {
+  const limited = loadAi({ summary: usefulSummary, summaryDurations: [17000, 6000], summaryTimeoutMs: 20000 });
+  assert.equal(await limited.ai.summarizeVoiceTranscript(longTranscript), '');
+  assert.deepEqual(limited.calls.map(call => call.requestOptions.timeout), [20000, 3000]);
+  const expired = loadAi({ summary: usefulSummary, summaryDurations: [45000] });
+  assert.equal(await expired.ai.summarizeVoiceTranscript(longTranscript), '');
+  assert.equal(expired.calls.length, 1);
+  assert.equal(expired.calls[0].requestOptions.timeout, 45000);
 });
 
 test('summary errors, bad JSON, wrong types, empty output, and stalls preserve the transcript', async () => {
@@ -173,20 +203,70 @@ test('temporary Google failures recover after backoff without exhausting or rota
     assert.deepEqual(delays, [1000]);
     assert.deepEqual(exhaustedKeys, []);
     assert.deepEqual(calls.map(call => call.key), ['test-key', 'test-key']);
-    assert.equal(calls[0].requestOptions.timeout, 60000);
-    assert.equal(calls[1].requestOptions.timeout, 59000);
+    assert.equal(calls[0].requestOptions.timeout, 15000);
+    assert.equal(calls[1].requestOptions.timeout, 15000);
     assert.equal(calls[1].input[0].inlineData.data, calls[0].input[0].inlineData.data);
   }
 });
 
-test('persistent 503 failures stop after the initial request and two retries', async () => {
+test('persistent 503 failures stop after three primary attempts and two reserve attempts', async () => {
   const error = new Error('[GoogleGenerativeAI Error]: [503 Service Unavailable] high demand');
-  const { ai, calls, delays, exhaustedKeys } = loadAi({ transcriptionErrors: [error, error, error] });
+  const { ai, calls, delays, exhaustedKeys } = loadAi({ transcriptionErrors: [error, error, error, error, error] });
   assert.equal(await ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg'), null);
-  assert.equal(calls.length, 3);
-  assert.deepEqual(delays, [1000, 2000]);
-  assert.deepEqual(calls.map(call => call.requestOptions.timeout), [60000, 59000, 57000]);
+  assert.equal(calls.length, 5);
+  assert.deepEqual(delays, [1000, 2000, 1000]);
+  assert.deepEqual(calls.map(call => call.requestOptions.timeout), [15000, 15000, 15000, 57000, 56000]);
   assert.deepEqual(exhaustedKeys, []);
+});
+
+test('captured three-503 pattern switches to an independent neutral model within the shared deadline', async () => {
+  const error = Object.assign(new Error('high demand'), { status: 503 });
+  const { ai, calls, models, delays, exhaustedKeys } = loadAi({
+    transcriptionErrors: [error, error, error],
+    transcriptionDurations: [10000, 8000, 5000],
+  });
+  const result = await ai.transcribeAudio(Buffer.from('same captured audio'), 'Имя', 'audio/ogg');
+  assert.equal(result?.text, 'Уточни адрес, пожалуйста.');
+  assert.deepEqual(calls.map(call => call.model), [
+    'test-voice-model', 'test-voice-model', 'test-voice-model', 'test-voice-fallback',
+  ]);
+  assert.deepEqual(calls.map(call => call.requestOptions.timeout), [15000, 15000, 9000, 34000]);
+  assert.deepEqual(delays, [1000, 2000]);
+  assert.deepEqual(exhaustedKeys, []);
+  assert.ok(calls.every(call => call.key === 'test-key'));
+  assert.ok(calls.every(call => call.input[0].inlineData.data === calls[0].input[0].inlineData.data));
+  const primary = models.find(model => model.model === 'test-voice-model' && model.generationConfig);
+  const fallback = models.find(model => model.model === 'test-voice-fallback');
+  assert.equal(fallback.systemInstruction, primary.systemInstruction);
+  assert.equal(fallback.generationConfig.responseMimeType, 'application/json');
+  assert.equal(fallback.tools, undefined);
+});
+
+test('reserve retries a temporary service failure within the original remaining budget', async () => {
+  const primaryError = Object.assign(new Error('high demand'), { status: 503 });
+  for (const status of [500, 502, 503, 504]) {
+    const { ai, calls, delays, exhaustedKeys } = loadAi({
+      transcriptionErrors: [primaryError, primaryError, primaryError, Object.assign(new Error('service unavailable'), { status })],
+      transcriptionDurations: [10000, 8000, 5000, 2000],
+    });
+    assert.ok((await ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg')).text);
+    assert.deepEqual(calls.slice(3).map(call => [call.model, call.requestOptions.timeout]), [
+      ['test-voice-fallback', 34000], ['test-voice-fallback', 31000],
+    ]);
+    assert.deepEqual(delays, [1000, 2000, 1000]);
+    assert.deepEqual(exhaustedKeys, []);
+  }
+});
+
+test('reserve does not retry when backoff would cross the shared deadline', async () => {
+  const error = Object.assign(new Error('high demand'), { status: 503 });
+  const { ai, calls, delays } = loadAi({
+    transcriptionErrors: [error, error, error, error],
+    transcriptionDurations: [10000, 8000, 5000, 33000],
+  });
+  assert.equal(await ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg'), null);
+  assert.equal(calls.length, 4);
+  assert.deepEqual(delays, [1000, 2000]);
 });
 
 test('a third transcription attempt can recover and quota rotation still works before a temporary outage', async () => {
@@ -208,20 +288,63 @@ test('invalid audio requests are not retried', async () => {
   assert.deepEqual(delays, []);
 });
 
-test('transcription retries share one deadline and stop when another backoff would exceed it', async () => {
+test('slow primary failures switch to reserve when another backoff would consume its budget', async () => {
   const error = Object.assign(new Error('unavailable'), { status: 503 });
-  const { ai, calls, delays } = loadAi({ transcriptionErrors: [error, error], transcriptionDurations: [30000, 27001] });
-  assert.equal(await ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg'), null);
-  assert.equal(calls.length, 2);
+  const { ai, calls, delays } = loadAi({ transcriptionErrors: [error, error], transcriptionDurations: [15000, 14000] });
+  assert.ok((await ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg')).text);
+  assert.equal(calls.length, 3);
   assert.deepEqual(delays, [1000]);
-  assert.equal(calls[1].requestOptions.timeout, 29000);
+  assert.deepEqual(calls.map(call => call.model), ['test-voice-model', 'test-voice-model', 'test-voice-fallback']);
+  assert.deepEqual(calls.map(call => call.requestOptions.timeout), [15000, 14000, 30000]);
+});
+
+test('primary request timeouts preserve the reserve budget without exhausting a key', async () => {
+  class GoogleGenerativeAIAbortError extends Error {}
+  const error = new GoogleGenerativeAIAbortError('Request aborted');
+  const { ai, calls, delays, exhaustedKeys } = loadAi({
+    transcriptionErrors: [error, error], transcriptionDurations: [15000, 14000],
+  });
+  assert.ok((await ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg')).text);
+  assert.deepEqual(calls.map(call => call.model), ['test-voice-model', 'test-voice-model', 'test-voice-fallback']);
+  assert.deepEqual(calls.map(call => call.requestOptions.timeout), [15000, 14000, 30000]);
+  assert.deepEqual(delays, [1000]);
+  assert.deepEqual(exhaustedKeys, []);
+});
+
+test('reserve quota rotation stays on the reserve model and shares the original deadline', async () => {
+  const error = Object.assign(new Error('unavailable'), { status: 503 });
+  const quota = new Error('429 quota exceeded');
+  const { ai, calls, exhaustedKeys } = loadAi({
+    keys: ['key-one', 'key-two'], transcriptionErrors: [error, error, error, quota],
+    transcriptionDurations: [10000, 8000, 5000, 1000],
+  });
+  assert.ok((await ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg')).text);
+  assert.deepEqual(calls.slice(3).map(call => [call.model, call.key, call.requestOptions.timeout]), [
+    ['test-voice-fallback', 'key-one', 34000], ['test-voice-fallback', 'key-two', 33000],
+  ]);
+  assert.deepEqual(exhaustedKeys, [0]);
+});
+
+test('reserve quota rotation cannot start another request after the shared deadline', async () => {
+  const error = Object.assign(new Error('unavailable'), { status: 503 });
+  const { ai, calls, delays } = loadAi({
+    keys: ['key-one', 'key-two'],
+    transcriptionErrors: [error, error, new Error('429 quota exceeded')],
+    transcriptionDurations: [15000, 14000, 30000],
+  });
+  assert.equal(await ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg'), null);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.map(call => call.requestOptions.timeout), [15000, 14000, 30000]);
+  assert.deepEqual(delays, [1000]);
 });
 
 test('stalled speech recognition returns within its deadline', async () => {
   const { ai, calls, delays } = loadAi({ transcriptionStall: true });
   assert.equal(await ai.transcribeAudio(Buffer.from('audio'), 'Имя', 'audio/ogg'), null);
-  assert.equal(calls.length, 1);
-  assert.deepEqual(delays, []);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.map(call => call.model), ['test-voice-model', 'test-voice-model', 'test-voice-fallback']);
+  assert.deepEqual(calls.map(call => call.requestOptions.timeout), [15000, 14000, 30000]);
+  assert.deepEqual(delays, [1000]);
 });
 
 test('missing or invalid transcripts never produce invented summaries', async () => {
@@ -250,6 +373,7 @@ test('voice cards escape user content, preserve paragraphs and show the full tra
   assert.match(long.html, /<br\/>• Ничего &lt;не обещаю&gt;/);
   assert.ok(long.html.includes(longTranscript));
   const fallback = rich.formatVoiceMessage({ text: longTranscript, summary: '' }, 'Имя');
+  assert.match(fallback.html, /Не удалось подготовить короткий пересказ\. Полная расшифровка ниже\./);
   assert.doesNotMatch(fallback.html, /expandable|Кратко:/);
   assert.match(fallback.html, /<details><summary>Расшифровка<\/summary><blockquote>/);
   assert.ok(fallback.html.includes(longTranscript));

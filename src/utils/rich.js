@@ -28,7 +28,8 @@ function formatVoiceMessage(transcription) {
   const summary = selectVoiceSummary(transcription.text, transcription.summary);
   if (!long) return { html: transcript };
   return {
-    html: (summary ? `<p>${escapeHtml(summary).replace(/\r?\n/g, '<br/>')}</p>` : '')
+    html: (summary ? `<p>${escapeHtml(summary).replace(/\r?\n/g, '<br/>')}</p>`
+      : '<p>Не удалось подготовить короткий пересказ. Полная расшифровка ниже.</p>')
       + `<details><summary>Расшифровка</summary>${transcript}</details>`,
   };
 }
