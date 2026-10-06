@@ -72,7 +72,8 @@ module.exports = {
   voiceFallbackModel: process.env.VOICE_FALLBACK_MODEL || 'gemini-3.5-flash',
   voiceSummaryTimeoutMs: positiveNumber(process.env.VOICE_SUMMARY_TIMEOUT_SECONDS, 45) * 1000,
   fallbackModelName: process.env.FALLBACK_MODEL || 'gemini-3.5-flash-lite',
-  contextSize: 30,
+  // Сколько последних сообщений чата бот держит в живом окне и отдаёт в промпт.
+  contextSize: Math.floor(positiveNumber(process.env.CONTEXT_SIZE, 100)),
 
   // === ПОТОЛОК ВЫВОДА МОДЕЛИ ===
   // Раньше было 3500 — длинные ответы рвало на полуслове (особенно с блоком «Источники»).
@@ -112,6 +113,14 @@ module.exports = {
   // бот сам приводит аргумент в споре или короткой реплике. SPONTANEOUS_SEARCH=false
   // выключает поиск именно для спонтанных реплик.
   spontaneousSearch: process.env.SPONTANEOUS_SEARCH !== 'false',
+
+  // === ДОЛГАЯ ПАМЯТЬ ЧАТА ===
+  // Сжатые выжимки старой переписки: сколько дней хранить, сколько сообщений в одну выжимку,
+  // сколько выжимок держать на чат и сколько символов памяти отдавать в промпт.
+  memoryRetentionDays: positiveNumber(process.env.MEMORY_RETENTION_DAYS, 180),
+  memoryChunkMessages: Math.floor(positiveNumber(process.env.MEMORY_CHUNK_MESSAGES, 30)),
+  memoryMaxBlocks: Math.floor(positiveNumber(process.env.MEMORY_MAX_BLOCKS, 40)),
+  memoryMaxChars: Math.floor(positiveNumber(process.env.MEMORY_MAX_CHARS, 4000)),
 
   // Молодёжный стиль речи: строчные буквы, без точек, сленг. STYLE_SLANG=false возвращает
   // прежний нейтральный тон.
