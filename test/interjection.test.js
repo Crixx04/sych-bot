@@ -3,7 +3,9 @@ const test = require('node:test');
 const {
   MIN_MESSAGE_CHARS,
   normalizeChance,
+  parseScore,
   shouldInterject,
+  stripModelPrefix,
   trimInterjection,
 } = require('../src/utils/interjection');
 
@@ -49,6 +51,27 @@ test('короткая реплика остаётся как есть', () => {
   assert.equal(trimInterjection(''), '');
   assert.equal(trimInterjection(null), '');
   assert.equal(trimInterjection(undefined), '');
+});
+
+test('оценка вмешательства разбирается из ответа модели', () => {
+  assert.equal(parseScore('7'), 7);
+  assert.equal(parseScore(' 10 '), 10);
+  assert.equal(parseScore('0'), 0);
+  assert.equal(parseScore('8 из 10'), 8);
+  assert.equal(parseScore('99'), 10, 'значение выше шкалы обрезается');
+  assert.equal(parseScore('скучно'), 0, 'без числа промолчим');
+  assert.equal(parseScore(null), 0);
+});
+
+test('служебные метки и кавычки из ответа модели срезаются', () => {
+  assert.equal(stripModelPrefix('Сыч: Ну и бред.'), 'Ну и бред.');
+  assert.equal(stripModelPrefix('Сыч — да ну'), 'да ну');
+  assert.equal(stripModelPrefix('You: и что?'), 'и что?');
+  assert.equal(stripModelPrefix('"Хватит уже"'), 'Хватит уже');
+  assert.equal(stripModelPrefix('«Спорно, конечно»'), 'Спорно, конечно');
+  assert.equal(stripModelPrefix('Сыч тут ни при чём'), 'Сыч тут ни при чём', 'фраза без разделителя не портится');
+  assert.equal(stripModelPrefix(''), '');
+  assert.equal(stripModelPrefix(null), '');
 });
 
 test('длинная реплика режется по границе предложения', () => {

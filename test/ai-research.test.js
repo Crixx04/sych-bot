@@ -16,6 +16,7 @@ function harness() {
     '../utils/rich': {}, './youtube': {}, './youtube-gemini': {},
     '../utils/content-policy': require('../src/utils/content-policy'), './research': require('../src/services/research'),
     '../utils/async': require('../src/utils/async'), '../utils/voice': {}, '../utils/reminders': {},
+    '../utils/interjection': require('../src/utils/interjection'),
   };
   const box = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/services/ai.js'), 'utf8'), {
