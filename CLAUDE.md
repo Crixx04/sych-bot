@@ -109,7 +109,8 @@ AI_API_KEY             # OpenRouter API key
 AI_BASE_URL            # Optional, defaults to OpenRouter
 SEARCH_PROVIDER        # tavily | perplexity | google
 TAVILY_API_KEY         # If using Tavily search
-SPONTANEOUS_CHANCE     # Шанс спонтанной реплики, 0.05 = 5%
+SPONTANEOUS_CHANCE     # Допуск: доля сообщений, доходящих до оценки, 0.25
+SPONTANEOUS_THRESHOLD  # Порог оценки 0..10, ниже — молчит, 8
 SPONTANEOUS_COOLDOWN_MIN # Пауза между спонтанными репликами в чате, минуты
 SPONTANEOUS_MAX_CHARS  # Потолок длины спонтанной реплики
 REACTION_CHANCE        # Шанс одиночной эмодзи-реакции, 0.015 = 1.5%
