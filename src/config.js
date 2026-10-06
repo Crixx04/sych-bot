@@ -113,6 +113,10 @@ module.exports = {
   // выключает поиск именно для спонтанных реплик.
   spontaneousSearch: process.env.SPONTANEOUS_SEARCH !== 'false',
 
+  // Молодёжный стиль речи: строчные буквы, без точек, сленг. STYLE_SLANG=false возвращает
+  // прежний нейтральный тон.
+  slangMode: process.env.STYLE_SLANG !== 'false',
+
   // Минимальная длина чужого сообщения, на которое бот вообще рассматривает влезание.
   // Короткие «ок», «+», «ага» отсекаются этим порогом.
   interjectionMinChars: positiveNumber(process.env.INTERJECTION_MIN_CHARS, 10),

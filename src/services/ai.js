@@ -534,7 +534,8 @@ async getResponse(history, currentMessage, imageBuffer = null, mimeType = "image
       history: contextStr,
       personalInfo: personalInfo,
       senderName: currentMessage.sender,
-      chatContext: chatProfile
+      chatContext: chatProfile,
+      slang: config.slangMode !== false
   });
 
   // 3. ЗАПРОС К SMART МОДЕЛИ (API)
@@ -607,7 +608,8 @@ async generateViaNative(history, currentMessage, imageBuffer, mimeType, userInst
         history: contextStr,
         personalInfo: personalInfo,
         senderName: currentMessage.sender,
-        chatContext: chatProfile
+        chatContext: chatProfile,
+      slang: config.slangMode !== false
     });
 
     return this.executeNativeWithRetry(async () => {
