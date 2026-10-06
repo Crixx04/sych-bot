@@ -619,7 +619,6 @@ async function processMessage(bot, msg) {
 <li>Кидай ссылку на картинку — скачаю и посмотрю</li>
 <li>Гуглю актуальное: курсы, новости, погода. «Сыч, проверь, это правда?» или «Откуда информация?» — проверю источники, дам ссылки и скажу, если подтверждения не нашёл</li>
 <li>Иногда я влезаю в разговор сам, без обращения, — короткой репликой. Хочешь тишины: <code>/mute${commandSuffix}</code></li>
-<li>«Сыч, озвучь [текст]» — прочитаю голосом. Можно реплаем: «сыч, озвучь» на любое сообщение</li>
 <li>«Сыч, встань на сторону [кого/чего]» — займу позицию и буду спорить до конца</li>
 <li>«Сыч напомни завтра в 10 купить молоко» — уведомлю позже. Реплаем на анонс: «Сыч напомни завтра в 12» или «Сыч напомни за час до начала»</li>
 <li>«Сыч напомни, сколько дней в неделе» — отвечу сейчас. Если для уведомления не хватает времени или темы, уточню: ответь реплаем на мой вопрос. Можно голосом. Без указанного пояса — Екатеринбург (UTC+5), можно указать МСК</li>
@@ -793,7 +792,7 @@ async function processMessage(bot, msg) {
           try { await bot.sendChatAction(chatId, 'typing', getActionOptions(threadId)); } catch(e){}
           const result = Math.random() > 0.5 ? "ОРЁЛ" : "РЕШКА";
           const flavor = await ai.generateFlavorText("подбросить монетку", result);
-          try { return await sendRich(bot, chatId, { markdown: flavor }, replyOpts(msg, threadId)); } catch(e){}
+          try { return await sendRich(bot, chatId, { markdown: flavor }, replyOpts(msg, threadId)); } catch(e){} finally { stopTyping(); }
       }
 
       const rangeMatch = cleanText.match(/(\d+)-(\d+)/);
@@ -803,22 +802,22 @@ async function processMessage(bot, msg) {
           const max = parseInt(rangeMatch[2]);
           const rand = Math.floor(Math.random() * (max - min + 1)) + min;
           const flavor = await ai.generateFlavorText(`выбрать число ${min}-${max}`, String(rand));
-          try { return await sendRich(bot, chatId, { markdown: flavor }, replyOpts(msg, threadId)); } catch(e){}
+          try { return await sendRich(bot, chatId, { markdown: flavor }, replyOpts(msg, threadId)); } catch(e){} finally { stopTyping(); }
       }
       
       const isWhoGame = cleanText.match(/(?:кто|кого)\s+(?:из нас|тут|здесь|в чате|сегодня)/) || cleanText.match(/сыч\W+кто\??$/) || cleanText.trim() === "сыч кто";
       if (isWhoGame) {
           try { await bot.sendChatAction(chatId, 'typing', getActionOptions(threadId)); } catch(e){}
           const randomUser = storage.getRandomUser(chatId);
-          if (!randomUser) return sendRich(bot, chatId, { markdown: "Никого не знаю пока." }, baseOpts(msg, threadId));
+          if (!randomUser) { stopTyping(); return sendRich(bot, chatId, { markdown: "Никого не знаю пока." }, baseOpts(msg, threadId)); }
           const flavor = await ai.generateFlavorText(`выбрать случайного человека из чата на вопрос "${text}"`, randomUser);
-          try { return await sendRich(bot, chatId, { markdown: flavor }, replyOpts(msg, threadId)); } catch(e){}
+          try { return await sendRich(bot, chatId, { markdown: flavor }, replyOpts(msg, threadId)); } catch(e){} finally { stopTyping(); }
       }
   }
 
   // === ОЗВУЧКА (Gemini TTS) ===
-  // «Сыч, озвучь …» или «сыч, озвучь» реплаем — читаем текст голосом и на этом всё.
-  if (hasTriggerWord) {
+  // По умолчанию выключена (SPEECH_ENABLED=true включает): «Сыч, озвучь …» или реплай «сыч, озвучь».
+  if (config.speechEnabled && hasTriggerWord) {
       const voiceRequest = parseVoiceRequest(text, msg.reply_to_message?.text || msg.reply_to_message?.caption || '');
       if (voiceRequest) {
           const result = await sendVoiceReply({ bot, msg, chatId, threadId, text: voiceRequest.text });
@@ -905,6 +904,7 @@ async function processMessage(bot, msg) {
         const vid = msg.video || msg.reply_to_message.video;
         // Лимит 20 МБ (Telegram API limit for getFile)
         if (vid.file_size > 20 * 1024 * 1024) {
+            stopTyping();
             return sendRich(bot, chatId, { markdown: "🐢 Братан, видос жирный пиздец (больше 20мб). Я не грузчик, таскать такое. Сожми или обрежь." }, replyOpts(msg, threadId));
         }
         try {
@@ -931,11 +931,13 @@ async function processMessage(bot, msg) {
         ];
 
         if (doc.file_size > 20 * 1024 * 1024) {
+            stopTyping();
             return sendRich(bot, chatId, { markdown: "🐘 Не, файл тяжелый (больше 20мб). Я пас." }, replyOpts(msg, threadId));
         }
 
         const officeDocument = isOfficeDocument(documentName, documentMime);
         if (!allowedMimes.includes(documentMime) && !documentMime.startsWith('image/') && !officeDocument) {
+             stopTyping();
              return sendRich(bot, chatId, {
                  markdown: "🗿 Этот формат пока не читаю. Давай PDF, DOCX, PPTX, XLSX или обычный текст."
              }, replyOpts(msg, threadId));

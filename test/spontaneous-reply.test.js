@@ -6,8 +6,10 @@ const test = require('node:test');
 
 // Проверяем саму фичу: бот влезает в чужой разговор без обращения по имени.
 // Харнесс повторяет test/conversation-routing.test.js, но управляет шансом и случаем.
-function harness({ chance = 1, cooldownMs = 15 * 60 * 1000, random = () => 0, reply = 'Ну и затея, конечно.', scores = [10] } = {}) {
+function harness({ chance = 1, cooldownMs = 15 * 60 * 1000, random = () => 0, reply = 'Ну и затея, конечно.', scores = [10], speechEnabled = true } = {}) {
   const state = { sent: [], answers: [], rated: [], spoken: [], audio: [] };
+  // Таймеры «печатает» подменяем, чтобы проверить: индикатор выключается, а не висит до предохранителя.
+  const timerLog = { intervals: [], cleared: [] };
   const nextScore = () => (scores.length > 1 ? scores.shift() : scores[0]);
   const storage = { isBanned: () => false, hasChat: () => true, updateChatName() {}, trackUser() {},
     isTopicMuted: () => false, getProfile: () => ({}), getChatProfile: () => ({ topic: 'test' }),
@@ -21,6 +23,7 @@ function harness({ chance = 1, cooldownMs = 15 * 60 * 1000, random = () => 0, re
       state.spoken.push(text);
       return Buffer.from([1, 2, 3, 4]);
     },
+    generateFlavorText: async (task, result) => `flavor:${result}`,
     rateInterjectionInterest: async contextText => {
       const score = nextScore();
       state.rated.push({ contextText, score });
@@ -40,6 +43,7 @@ function harness({ chance = 1, cooldownMs = 15 * 60 * 1000, random = () => 0, re
       adminId: 999, botId: 888, contextSize: 30,
       spontaneousChance: chance, spontaneousCooldownMs: cooldownMs,
       spontaneousMaxChars: 300, spontaneousThreshold: 8, reactionChance: 0,
+      speechEnabled, speechMaxChars: 400,
       triggerRegex: /(?<![а-яёa-z])(сыч|sych)(?![а-яёa-z])/i,
     },
     axios: { get: async () => ({ data: Buffer.from('x') }) },
@@ -67,7 +71,13 @@ function harness({ chance = 1, cooldownMs = 15 * 60 * 1000, random = () => 0, re
       return dependencies[name];
     },
     Buffer, console: { log() {}, error() {} },
-    setTimeout, clearTimeout, setInterval, clearInterval,
+    setTimeout: () => 0, clearTimeout: () => {},
+    setInterval: (fn, ms) => {
+      const id = timerLog.intervals.length + 1;
+      timerLog.intervals.push({ id, ms });
+      return id;
+    },
+    clearInterval: id => { timerLog.cleared.push(id); },
     Math: { ...Math, random },
   });
   const bot = {
@@ -77,7 +87,7 @@ function harness({ chance = 1, cooldownMs = 15 * 60 * 1000, random = () => 0, re
     sendVoice: async (chatId, buffer, options) => { state.audio.push({ kind: 'voice', chatId, buffer, options }); },
     sendAudio: async (chatId, buffer, options) => { state.audio.push({ kind: 'audio', chatId, buffer, options }); },
   };
-  return { state, async message(text, overrides = {}) {
+  return { state, timerLog, async message(text, overrides = {}) {
     const msg = {
       message_id: 500, from: { id: 555, first_name: 'Тест' },
       chat: { id: -100, type: 'supergroup' }, is_topic_message: true, message_thread_id: 184,
@@ -240,5 +250,31 @@ test('упоминание озвучки в обычной фразе не вк
 
   assert.equal(state.spoken.length, 0, 'озвучки не было');
   assert.equal(state.audio.length, 0);
+  assert.equal(state.answers.length, 1, 'обычный ответ');
+});
+
+test('после «кинь монетку» индикатор «печатает» выключается', async () => {
+  const { state, timerLog, message } = harness({ chance: 0 });
+  await message('Сыч, кинь монетку');
+
+  assert.equal(state.sent.length, 1, 'ответ ушёл');
+  assert.ok(timerLog.intervals.length >= 1, 'печатание стартовало');
+  assert.deepEqual(timerLog.cleared, timerLog.intervals.map(item => item.id), 'все таймеры печатания выключены');
+});
+
+test('отказ по размеру файла тоже выключает «печатает»', async () => {
+  const { state, timerLog, message } = harness({ chance: 0 });
+  await message('Сыч, глянь видео', { video: { file_id: 'v', file_size: 30 * 1024 * 1024 } });
+
+  assert.equal(state.sent.length, 1, 'бот объяснил отказ');
+  assert.deepEqual(timerLog.cleared, timerLog.intervals.map(item => item.id), 'все таймеры печатания выключены');
+});
+
+test('при выключенной озвучке просьба уходит в обычный текстовый ответ', async () => {
+  const { state, message } = harness({ chance: 0, speechEnabled: false });
+  await message('Сыч, озвучь «привет мир»');
+
+  assert.equal(state.spoken.length, 0, 'в TTS не ходили');
+  assert.equal(state.audio.length, 0, 'аудио не отправляли');
   assert.equal(state.answers.length, 1, 'обычный ответ');
 });

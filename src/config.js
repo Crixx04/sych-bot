@@ -109,6 +109,9 @@ module.exports = {
   reactionChance: ratio(process.env.REACTION_CHANCE, 0.015),
   // === ОЗВУЧКА (Gemini TTS) ===
   // Модель и голос озвучки: список доступных голосов — в документации Gemini TTS.
+  // Озвучка выключена по умолчанию: включается SPEECH_ENABLED=true.
+  // Причина: TTS требует ключа Google, а голосовые сообщения — ещё и ffmpeg на сервере.
+  speechEnabled: process.env.SPEECH_ENABLED === 'true',
   speechModel: process.env.SPEECH_MODEL || 'gemini-2.5-flash-preview-tts',
   speechVoice: process.env.SPEECH_VOICE || 'Charon',
   // Потолок текста для озвучки (символы) и таймаут запроса.
