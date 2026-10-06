@@ -14,6 +14,12 @@ const {
   stripModelPrefix,
   trimInterjection,
 } = require('../utils/interjection');
+const { redactSpoilers } = require('../utils/spoilers');
+const { IDENTITY_HINT, isIdentityChallenge } = require('../utils/identity');
+const { parseSideTaking } = require('../utils/side-taking');
+const { parseVoiceRequest } = require('../utils/voice-request');
+const { toVoiceNote } = require('../services/speech');
+const prompts = require('../core/prompts');
 const pendingReminders = new PendingReminders();
 const {
   buildOfficePromptContext,
@@ -117,6 +123,30 @@ async function evaluateAndInterject({ bot, msg, chatId, threadId, text, userId, 
     await sendSpontaneousReply({ bot, msg, chatId, threadId, text, userId, senderName });
   } catch (error) {
     console.error(`[INTERJECTION ERROR] ${error.message}`);
+  }
+}
+
+// Озвучка: PCM от Gemini оборачиваем в WAV, при наличии ffmpeg — в голосовое OGG/Opus.
+// Без ffmpeg отправляем WAV как аудиофайл: смысл сохраняется, вид другой.
+async function sendVoiceReply({ bot, msg, chatId, threadId, text }) {
+  try {
+    await bot.sendChatAction(chatId, 'record_voice', getActionOptions(threadId)).catch(() => {});
+    const wav = await ai.speak(String(text).slice(0, config.speechMaxChars));
+    const note = toVoiceNote(wav);
+    const options = {
+      ...(getActionOptions(threadId) || {}),
+      reply_to_message_id: msg.message_id,
+      filename: note.filename,
+      ...(msg.business_connection_id ? { business_connection_id: msg.business_connection_id } : {}),
+    };
+    if (note.voice) await bot.sendVoice(chatId, note.buffer, options);
+    else await bot.sendAudio(chatId, note.buffer, options);
+    console.log(`[SPEECH] ${chatId}: ${String(text).length} симв., голосовое=${note.voice}`);
+    return true;
+  } catch (error) {
+    console.error(`[SPEECH ERROR] ${error.message}`);
+    await sendRich(bot, chatId, { markdown: `🎙 Озвучить не вышло: ${error.message}` }, replyOpts(msg, threadId)).catch(() => {});
+    return false;
   }
 }
 
@@ -256,7 +286,8 @@ async function processMessage(bot, msg) {
     const userId = msg.from?.id;
     if (!userId) return;
 
-    let text = msg.text || msg.caption || "";
+    // Текст под спойлером не уходит ни в модель, ни в досье участников.
+    let text = redactSpoilers(msg.text || msg.caption || "", msg.entities || msg.caption_entities || []);
     let addressedCommand = null;
     if (text.trimStart().startsWith('/')) {
         try {
@@ -588,6 +619,8 @@ async function processMessage(bot, msg) {
 <li>Кидай ссылку на картинку — скачаю и посмотрю</li>
 <li>Гуглю актуальное: курсы, новости, погода. «Сыч, проверь, это правда?» или «Откуда информация?» — проверю источники, дам ссылки и скажу, если подтверждения не нашёл</li>
 <li>Иногда я влезаю в разговор сам, без обращения, — короткой репликой. Хочешь тишины: <code>/mute${commandSuffix}</code></li>
+<li>«Сыч, озвучь [текст]» — прочитаю голосом. Можно реплаем: «сыч, озвучь» на любое сообщение</li>
+<li>«Сыч, встань на сторону [кого/чего]» — займу позицию и буду спорить до конца</li>
 <li>«Сыч напомни завтра в 10 купить молоко» — уведомлю позже. Реплаем на анонс: «Сыч напомни завтра в 12» или «Сыч напомни за час до начала»</li>
 <li>«Сыч напомни, сколько дней в неделе» — отвечу сейчас. Если для уведомления не хватает времени или темы, уточню: ответь реплаем на мой вопрос. Можно голосом. Без указанного пояса — Екатеринбург (UTC+5), можно указать МСК</li>
 </ul>
@@ -783,6 +816,17 @@ async function processMessage(bot, msg) {
       }
   }
 
+  // === ОЗВУЧКА (Gemini TTS) ===
+  // «Сыч, озвучь …» или «сыч, озвучь» реплаем — читаем текст голосом и на этом всё.
+  if (hasTriggerWord) {
+      const voiceRequest = parseVoiceRequest(text, msg.reply_to_message?.text || msg.reply_to_message?.caption || '');
+      if (voiceRequest) {
+          const result = await sendVoiceReply({ bot, msg, chatId, threadId, text: voiceRequest.text });
+          stopTyping(); // иначе «печатает» висит до предохранителя в 90 секунд
+          return result;
+      }
+  }
+
   // === РЕШЕНИЕ ОБ ОТВЕТЕ ===
   // Бот отвечает ТОЛЬКО когда его явно вызвали (тег "сыч/sych") или ответили на его сообщение
   const shouldAnswer = isDirectlyCalled;
@@ -950,7 +994,18 @@ async function processMessage(bot, msg) {
             } catch(e) {}
         }
     }
-    const instruction = msg.from.username ? storage.getUserInstruction(msg.from.username) : "";
+    let instruction = msg.from.username ? storage.getUserInstruction(msg.from.username) : "";
+
+    // «Ты же бот» — отвечаем коротко и в характере, по готовым отмазкам.
+    if (hasTriggerWord && isIdentityChallenge(text)) {
+        instruction = [instruction, IDENTITY_HINT].filter(Boolean).join('\n\n');
+    }
+
+    // «Сыч, встань на сторону X» — режим спора: держим сторону и аргументируем.
+    if (hasTriggerWord) {
+        const side = parseSideTaking(text);
+        if (side) instruction = [instruction, prompts.sideTaking(side.target)].filter(Boolean).join('\n\n');
+    }
     const userProfile = storage.getProfile(chatId, userId);
 
     // === ЛОГИКА ССЫЛОК ===

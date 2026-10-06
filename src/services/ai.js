@@ -24,6 +24,7 @@ const { research, evidenceContext, publicUrl, answerAuditPrompt, conservativeAns
 const { withTimeout } = require('../utils/async');
 const { parseVoiceJson, readTranscript, shouldSummarizeVoice, selectVoiceSummary } = require('../utils/voice');
 const { parseScore } = require('../utils/interjection');
+const { synthesizeSpeech } = require('./speech');
 const { resolveReminderDecision, isRecallQuestion } = require('../utils/reminders');
 
 const YOUTUBE_TRANSCRIPT_TIMEOUT_MS = 25000;
@@ -745,6 +746,22 @@ async determineReaction(contextText) {
 async rateInterjectionInterest(contextText) {
   const text = await this.runLogicText(prompts.interjectionScore(contextText));
   return parseScore(text);
+}
+
+// Озвучка текста: нативный Google Gemini TTS. Отдельный канал, потому что TTS
+// отдаёт аудио, а не текст, и в OpenAI-совместимом канале такого режима нет.
+async speak(text) {
+  if (!this.keys || this.keys.length === 0) {
+    throw new Error('нет ключей Google Gemini для озвучки');
+  }
+  const apiKey = this.keys[this.keyIndex] || this.keys[0];
+  const { wav } = await synthesizeSpeech(text, {
+    apiKey,
+    model: config.speechModel,
+    voice: config.speechVoice,
+    timeoutMs: config.speechTimeoutMs,
+  });
+  return wav;
 }
 
 async generateProfileDescription(profileData, targetName) {

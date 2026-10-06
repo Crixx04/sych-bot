@@ -75,6 +75,7 @@ function loadAi({ transcript = 'Уточни адрес, пожалуйста.',
     '../utils/rich': {}, './youtube': {}, './youtube-gemini': {}, '../utils/content-policy': {}, './research': {},
     '../utils/voice': voice,
     '../utils/interjection': require('../src/utils/interjection'),
+    './speech': { synthesizeSpeech: async () => ({ wav: Buffer.alloc(4), mime: 'audio/L16' }) },
     '../utils/reminders': require('../src/utils/reminders'),
     '../utils/async': { withTimeout: (operation, timeout, label) => {
       const deadlineGuard = label === 'Расшифровка голосового';
@@ -394,6 +395,12 @@ test('message handler sends one voice card in the original topic and preserves f
     '../utils/privacy': { isForgetMeRequest: () => false }, '../utils/profile-query': {},
     '../utils/commands': {}, '../services/documents': {},
     '../utils/interjection': require('../src/utils/interjection'),
+    '../utils/spoilers': require('../src/utils/spoilers'),
+    '../utils/identity': require('../src/utils/identity'),
+    '../utils/side-taking': require('../src/utils/side-taking'),
+    '../utils/voice-request': require('../src/utils/voice-request'),
+    '../services/speech': { toVoiceNote: wav => ({ buffer: wav, filename: 'answer.wav', voice: false }) },
+    '../core/prompts': { sideTaking: target => `[СПОР: ${target}]` },
     '../utils/reminders': require('../src/utils/reminders'),
   }, { setTimeout, clearTimeout, setInterval, clearInterval, Math: { ...Math, random: () => 1 } });
   const msg = { message_id: 10, from: { id: 999, first_name: 'Имя' },

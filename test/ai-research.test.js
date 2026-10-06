@@ -17,6 +17,7 @@ function harness() {
     '../utils/content-policy': require('../src/utils/content-policy'), './research': require('../src/services/research'),
     '../utils/async': require('../src/utils/async'), '../utils/voice': {}, '../utils/reminders': {},
     '../utils/interjection': require('../src/utils/interjection'),
+    './speech': { synthesizeSpeech: async () => ({ wav: Buffer.alloc(4), mime: 'audio/L16' }) },
   };
   const box = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/services/ai.js'), 'utf8'), {

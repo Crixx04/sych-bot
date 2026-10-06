@@ -107,5 +107,13 @@ module.exports = {
   spontaneousMaxChars: Math.floor(positiveNumber(process.env.SPONTANEOUS_MAX_CHARS, 300)),
   // Шанс одиночной эмодзи-реакции на чужое сообщение (раньше было зашито 0.015).
   reactionChance: ratio(process.env.REACTION_CHANCE, 0.015),
+  // === ОЗВУЧКА (Gemini TTS) ===
+  // Модель и голос озвучки: список доступных голосов — в документации Gemini TTS.
+  speechModel: process.env.SPEECH_MODEL || 'gemini-2.5-flash-preview-tts',
+  speechVoice: process.env.SPEECH_VOICE || 'Charon',
+  // Потолок текста для озвучки (символы) и таймаут запроса.
+  speechMaxChars: Math.floor(positiveNumber(process.env.SPEECH_MAX_CHARS, 400)),
+  speechTimeoutMs: positiveNumber(process.env.SPEECH_TIMEOUT_SECONDS, 30) * 1000,
+
   triggerRegex: /(?<![а-яёa-z])(сыч|sych)(?![а-яёa-z])/i,
 };

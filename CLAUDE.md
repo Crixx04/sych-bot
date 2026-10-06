@@ -114,6 +114,9 @@ SPONTANEOUS_THRESHOLD  # Порог оценки 0..10, ниже — молчи�
 SPONTANEOUS_COOLDOWN_MIN # Пауза между спонтанными репликами в чате, минуты
 SPONTANEOUS_MAX_CHARS  # Потолок длины спонтанной реплики
 REACTION_CHANCE        # Шанс одиночной эмодзи-реакции, 0.015 = 1.5%
+SPEECH_MODEL           # Модель озвучки, gemini-2.5-flash-preview-tts
+SPEECH_VOICE           # Голос озвучки, Charon
+SPEECH_MAX_CHARS       # Потолок текста для озвучки, 400
 GOOGLE_GEMINI_API_KEY  # Required for fallback
 GOOGLE_GEMINI_API_KEY_2 # Optional additional keys for rotation
 YOUTUBE_GEMINI_MODEL   # Direct public YouTube fallback, default gemini-3.5-flash-lite

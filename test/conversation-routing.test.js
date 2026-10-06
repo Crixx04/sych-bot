@@ -30,6 +30,12 @@ function harness() {
     '../utils/privacy': { isForgetMeRequest: () => false }, '../utils/profile-query': {},
     '../utils/commands': {}, '../services/documents': {}, '../utils/reminders': require('../src/utils/reminders'),
     '../utils/interjection': require('../src/utils/interjection'),
+    '../utils/spoilers': require('../src/utils/spoilers'),
+    '../utils/identity': require('../src/utils/identity'),
+    '../utils/side-taking': require('../src/utils/side-taking'),
+    '../utils/voice-request': require('../src/utils/voice-request'),
+    '../services/speech': { toVoiceNote: wav => ({ buffer: wav, filename: 'answer.wav', voice: false }) },
+    '../core/prompts': { sideTaking: target => `[СПОР: ${target}]` },
   };
   const box = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/core/logic.js'), 'utf8'), {

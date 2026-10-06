@@ -54,6 +54,12 @@ function loadHandler() {
     '../utils/profile-query': {},
     '../utils/commands': { resolveAddressedCommand },
     '../utils/interjection': require('../src/utils/interjection'),
+    '../utils/spoilers': require('../src/utils/spoilers'),
+    '../utils/identity': require('../src/utils/identity'),
+    '../utils/side-taking': require('../src/utils/side-taking'),
+    '../utils/voice-request': require('../src/utils/voice-request'),
+    '../services/speech': { toVoiceNote: wav => ({ buffer: wav, filename: 'answer.wav', voice: false }) },
+    '../core/prompts': { sideTaking: target => `[СПОР: ${target}]` },
     '../utils/reminders': require('../src/utils/reminders'),
     '../services/documents': {},
   };

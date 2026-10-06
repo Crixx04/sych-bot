@@ -7,15 +7,19 @@ const test = require('node:test');
 // Проверяем саму фичу: бот влезает в чужой разговор без обращения по имени.
 // Харнесс повторяет test/conversation-routing.test.js, но управляет шансом и случаем.
 function harness({ chance = 1, cooldownMs = 15 * 60 * 1000, random = () => 0, reply = 'Ну и затея, конечно.', scores = [10] } = {}) {
-  const state = { sent: [], answers: [], rated: [] };
+  const state = { sent: [], answers: [], rated: [], spoken: [], audio: [] };
   const nextScore = () => (scores.length > 1 ? scores.shift() : scores[0]);
   const storage = { isBanned: () => false, hasChat: () => true, updateChatName() {}, trackUser() {},
     isTopicMuted: () => false, getProfile: () => ({}), getChatProfile: () => ({ topic: 'test' }),
     getUserInstruction: () => '' };
   const ai = {
     getResponse: async (history, input, image, mime, instruction, profile, isSpontaneous) => {
-      state.answers.push({ input, isSpontaneous, history: [...history] });
+      state.answers.push({ input, isSpontaneous, instruction, history: [...history] });
       return reply;
+    },
+    speak: async text => {
+      state.spoken.push(text);
+      return Buffer.from([1, 2, 3, 4]);
     },
     rateInterjectionInterest: async contextText => {
       const score = nextScore();
@@ -48,6 +52,12 @@ function harness({ chance = 1, cooldownMs = 15 * 60 * 1000, random = () => 0, re
     '../services/documents': {},
     '../utils/reminders': require('../src/utils/reminders'),
     '../utils/interjection': require('../src/utils/interjection'),
+    '../utils/spoilers': require('../src/utils/spoilers'),
+    '../utils/identity': require('../src/utils/identity'),
+    '../utils/side-taking': require('../src/utils/side-taking'),
+    '../utils/voice-request': require('../src/utils/voice-request'),
+    '../services/speech': { toVoiceNote: wav => ({ buffer: wav, filename: 'answer.wav', voice: false }) },
+    '../core/prompts': { sideTaking: target => `[СПОР: ${target}]` },
   };
   const box = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/core/logic.js'), 'utf8'), {
@@ -64,6 +74,8 @@ function harness({ chance = 1, cooldownMs = 15 * 60 * 1000, random = () => 0, re
     getFileLink: async () => 'mock://file',
     sendChatAction: async () => {},
     setMessageReaction: async () => {},
+    sendVoice: async (chatId, buffer, options) => { state.audio.push({ kind: 'voice', chatId, buffer, options }); },
+    sendAudio: async (chatId, buffer, options) => { state.audio.push({ kind: 'audio', chatId, buffer, options }); },
   };
   return { state, async message(text, overrides = {}) {
     const msg = {
@@ -166,4 +178,67 @@ test('служебная метка и кавычки из ответа моде
   await message(LONG_TEXT);
 
   assert.equal(state.sent[0].content.markdown, 'Ну и затея, конечно.');
+});
+
+test('текст под спойлером не уходит в модель', async () => {
+  const { state, message } = harness({ chance: 0 });
+  const text = 'сыч, глянь: секретная цифра 42';
+  await message(text, { entities: [{ type: 'spoiler', offset: 12, length: 15 }] });
+
+  assert.equal(state.answers.length, 1, 'бот ответил по обращению');
+  const sentToModel = state.answers[0].input.text;
+  assert.ok(!sentToModel.includes('секретная цифра'), sentToModel);
+  assert.ok(sentToModel.includes('[скрыто под спойлером]'), sentToModel);
+});
+
+test('на «ты же бот» уходит подсказка с отмазками', async () => {
+  const { state, message } = harness({ chance: 0 });
+  await message('Сыч, ты бот?');
+
+  assert.equal(state.answers.length, 1);
+  assert.ok(state.answers[0].instruction.includes('Не признавайся'), state.answers[0].instruction);
+});
+
+test('просьба встать на сторону превращается в режим спора', async () => {
+  const { state, message } = harness({ chance: 0 });
+  await message('Сыч, встань на сторону удалёнки');
+
+  assert.equal(state.answers.length, 1);
+  assert.ok(state.answers[0].instruction.includes('[СПОР: удалёнки]'), state.answers[0].instruction);
+});
+
+test('обычная просьба не включает режим спора', async () => {
+  const { state, message } = harness({ chance: 0 });
+  await message('Сыч, поддержи меня');
+
+  assert.equal(state.answers.length, 1);
+  assert.ok(!state.answers[0].instruction.includes('[СПОР:'), state.answers[0].instruction);
+});
+
+test('просьба озвучить отправляет аудио вместо текста', async () => {
+  const { state, message } = harness({ chance: 0 });
+  await message('Сыч, озвучь «привет мир»');
+
+  assert.deepEqual(state.spoken, ['привет мир'], 'на озвучку ушёл именно текст');
+  assert.equal(state.audio.length, 1, 'ушло одно аудио');
+  assert.equal(state.answers.length, 0, 'обычного ответа нет');
+  assert.equal(state.audio[0].kind, 'audio', 'без ffmpeg отправляем аудиофайл');
+  assert.equal(state.audio[0].options.message_thread_id, 184, 'остаёмся в своей теме');
+});
+
+test('«озвучь» реплаем читает текст того сообщения', async () => {
+  const { state, message } = harness({ chance: 0 });
+  await message('сыч, озвучь', { reply_to_message: { from: { id: 777 }, text: 'Отчёт готов, ждём правки.' } });
+
+  assert.deepEqual(state.spoken, ['Отчёт готов, ждём правки.']);
+  assert.equal(state.audio.length, 1);
+});
+
+test('упоминание озвучки в обычной фразе не включает режим', async () => {
+  const { state, message } = harness({ chance: 0 });
+  await message('Сыч, озвучка в видео была плохая, что скажешь?');
+
+  assert.equal(state.spoken.length, 0, 'озвучки не было');
+  assert.equal(state.audio.length, 0);
+  assert.equal(state.answers.length, 1, 'обычный ответ');
 });
