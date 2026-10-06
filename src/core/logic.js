@@ -11,6 +11,7 @@ const { PendingReminders, reminderConfirmation } = require('../utils/reminders')
 const {
   MIN_MESSAGE_CHARS,
   shouldInterject,
+  stripModelPrefix,
   trimInterjection,
 } = require('../utils/interjection');
 const pendingReminders = new PendingReminders();
@@ -100,6 +101,25 @@ function addToHistory(chatId, sender, text, userId = null, relatedUserId = null)
   return entry; // возвращаем запись, чтобы её можно было дообогатить (напр. описанием картинки)
 }
 
+// Второй фильтр вмешательства: модель оценивает сообщение по шкале 0..10, и реплика
+// уходит только если оценка не ниже порога. Кулдаун сдвигаем только по факту влезания,
+// чтобы «потраченный» на неудачную оценку разговор не блокировал следующую попытку.
+async function evaluateAndInterject({ bot, msg, chatId, threadId, text, userId, senderName, historyBlock }) {
+  try {
+    const score = await ai.rateInterjectionInterest(`${historyBlock}\nСообщение для оценки: ${text}`);
+    if (score < config.spontaneousThreshold) {
+      console.log(`[INTERJECTION] ${chatId}: оценка ${score} ниже порога ${config.spontaneousThreshold} — молчу`);
+      return;
+    }
+    if (storage.isTopicMuted(chatId, threadId)) return;
+
+    lastInterjectionAt.set(chatId, Date.now());
+    await sendSpontaneousReply({ bot, msg, chatId, threadId, text, userId, senderName });
+  } catch (error) {
+    console.error(`[INTERJECTION ERROR] ${error.message}`);
+  }
+}
+
 // Спонтанная реплика: бот влезает в чужой разговор сам, без обращения по имени.
 // Идёт тем же путём, что и обычный ответ (характер, досье, контекст чата), но
 // коротко и без поиска: isSpontaneous отключает исследование и чтение ссылок.
@@ -120,7 +140,7 @@ async function sendSpontaneousReply({ bot, msg, chatId, threadId, text, userId, 
       ''
     );
 
-    const trimmed = trimInterjection(reply, config.spontaneousMaxChars);
+    const trimmed = trimInterjection(stripModelPrefix(reply), config.spontaneousMaxChars);
     if (!trimmed) {
       console.log(`[INTERJECTION] ${chatId}: сказать нечего, молчу`);
       return;
@@ -786,15 +806,16 @@ async function processMessage(bot, msg) {
         });
     }
 
-    // 2. Спонтанная реплика фразой — с кулдауном на чат
+    // 2. Спонтанная реплика. Сначала допуск случайности и кулдаун (shouldInterject),
+    //    потом дешёвая оценка 0..10 — «стоит ли вообще влезать» (порог в config.js).
+    //    Так бот влезает не в каждый попавшийся разговор, а в тот, где есть что сказать.
     if (shouldInterject({
         chance: config.spontaneousChance,
         cooldownMs: config.spontaneousCooldownMs,
         lastAt: lastInterjectionAt.get(chatId) || 0,
         random: Math.random,
     })) {
-        lastInterjectionAt.set(chatId, Date.now());
-        sendSpontaneousReply({ bot, msg, chatId, threadId, text, userId, senderName });
+        evaluateAndInterject({ bot, msg, chatId, threadId, text, userId, senderName, historyBlock });
     }
 }
 

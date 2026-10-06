@@ -47,4 +47,36 @@ function trimInterjection(text, maxChars = 300) {
   return `${cut.trim()}…`;
 }
 
-module.exports = { MIN_MESSAGE_CHARS, normalizeChance, shouldInterject, trimInterjection };
+// Модель иногда дописывает «Сыч:» или оборачивает реплику в кавычки — срезаем.
+// Разделитель после метки обязателен, иначе пострадает обычная фраза вроде «Сыч тут ни при чём».
+const PREFIX_RE = /^\s*\*{0,2}\s*(?:сыч|sych|you|bot|assistant|ассистент)\s*\*{0,2}\s*[:\-—]\s*/i;
+const QUOTES_RE = /^["'«»“”„]+|["'«»“”„]+$/g;
+
+function stripModelPrefix(text) {
+  if (typeof text !== 'string') return '';
+  // Кавычки могут оборачивать метку («Сыч: ...»), поэтому сначала снимаем их, потом метку.
+  let out = text.trim().replace(QUOTES_RE, '').trim();
+  const withoutPrefix = out.replace(PREFIX_RE, '').trim();
+  if (withoutPrefix) out = withoutPrefix;
+  return out.replace(QUOTES_RE, '').trim();
+}
+
+// Оценка «стоит ли влезать» приходит от модели как число 0..10.
+// Всё, что не разобралось, считаем нулём — лучше промолчать.
+function parseScore(text) {
+  if (typeof text !== 'string') return 0;
+  const match = text.match(/\d{1,2}/);
+  if (!match) return 0;
+  const value = Number.parseInt(match[0], 10);
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(Math.max(value, 0), 10);
+}
+
+module.exports = {
+  MIN_MESSAGE_CHARS,
+  normalizeChance,
+  parseScore,
+  shouldInterject,
+  stripModelPrefix,
+  trimInterjection,
+};
