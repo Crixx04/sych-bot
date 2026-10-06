@@ -1,5 +1,6 @@
 const packageInfo = require('../package.json');
-require('dotenv').config();
+// Файл с секретами можно вынести за пределы репозитория: SYCH_ENV_FILE=/путь/к/env.
+require('dotenv').config({ path: process.env.SYCH_ENV_FILE || '.env' });
 
 function positiveNumber(value, fallback) {
   const parsed = Number(value);
@@ -45,11 +46,12 @@ module.exports = {
   // === АКТУАЛЬНЫЕ МОДЕЛИ (АВГУСТ 2026) ===
 
   // 1. УМНАЯ (Ответы в чате)
-  mainModel: 'google/gemini-3.7-flash',
+  // Модели можно переопределить из .env: MAIN_MODEL и LOGIC_MODEL.
+  mainModel: process.env.MAIN_MODEL || 'google/gemini-3.7-flash',
   
   // 2. ЛОГИКА (Анализ, реакции, проверки)
   // Free версия недоступна, используем эффективную платную
-  logicModel: 'google/gemma-3-27b-it', 
+  logicModel: process.env.LOGIC_MODEL || 'google/gemma-3-27b-it', 
 
   // === ПОИСК (RAG или NATIVE) ===
   // Варианты: 
