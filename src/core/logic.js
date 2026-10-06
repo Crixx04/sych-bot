@@ -14,6 +14,7 @@ const {
   stripModelPrefix,
   trimInterjection,
 } = require('../utils/interjection');
+const { memoryContext, nextCompressionSize } = require('../utils/chat-memory');
 const { redactSpoilers } = require('../utils/spoilers');
 const { IDENTITY_HINT, isIdentityChallenge } = require('../utils/identity');
 const { parseSideTaking } = require('../utils/side-taking');
@@ -95,15 +96,16 @@ function getSychErrorReply(errText) {
 function addToHistory(chatId, sender, text, userId = null, relatedUserId = null) {
   if (!chatHistory[chatId]) chatHistory[chatId] = [];
   const entry = {
+    at: Date.now(),
     role: sender,
     text: text,
     userId: userId === null ? null : String(userId),
     relatedUserId: relatedUserId === null ? null : String(relatedUserId),
   };
   chatHistory[chatId].push(entry);
-  if (chatHistory[chatId].length > config.contextSize) {
-    chatHistory[chatId].shift();
-  }
+  // Переполнение окна уходит в сжатую память, а не выбрасывается молча.
+  storage.saveHistory(chatId, chatHistory[chatId]);
+  compressHistoryIfNeeded(chatId).catch(error => console.error(`[MEMORY] ${error.message}`));
   return entry; // возвращаем запись, чтобы её можно было дообогатить (напр. описанием картинки)
 }
 
@@ -167,7 +169,8 @@ async function sendSpontaneousReply({ bot, msg, chatId, threadId, text, userId, 
       userProfile,
       true, // isSpontaneous
       chatProfile,
-      ''
+      '',
+      chatMemoryText(chatId)
     );
 
     const trimmed = trimInterjection(stripModelPrefix(reply), config.spontaneousMaxChars);
@@ -281,10 +284,63 @@ async function initChatProfile(bot, chatId) {
     }
 }
 
+// === ДОЛГАЯ ПАМЯТЬ ЧАТА ===
+// Текст сжатой памяти для промпта: что бот помнит о прошлых днях в этом чате.
+function chatMemoryText(chatId) {
+  const memories = storage.getChatMemories(chatId, {
+    retentionDays: config.memoryRetentionDays,
+    maxBlocks: config.memoryMaxBlocks,
+  });
+  return memoryContext(memories, config.memoryMaxChars);
+}
+
+// Когда живое окно переполнено, старые сообщения уходят в долгую память сжатой выжимкой.
+// Выбрасываем их только после успешного сжатия — иначе переписка потерялась бы.
+const lastCompressFailedAt = new Map();
+async function compressHistoryIfNeeded(chatId) {
+  const history = chatHistory[chatId] || [];
+  const chunkSize = nextCompressionSize(history.length, config.contextSize, config.memoryChunkMessages);
+  if (!chunkSize) return;
+  if (Date.now() - (lastCompressFailedAt.get(chatId) || 0) < 10 * 60 * 1000) return;
+
+  const chunk = history.slice(0, chunkSize);
+  let summary = null;
+  try {
+    summary = await ai.summarizeChatChunk(chunk);
+  } catch (error) {
+    console.error(`[MEMORY FAIL] ${error.message}`);
+  }
+  if (!summary) {
+    lastCompressFailedAt.set(chatId, Date.now());
+    // Страховка от распухания окна: памяти нет, а сообщений вдвое больше окна — режем.
+    if (history.length > config.contextSize * 2) {
+      chatHistory[chatId] = history.slice(-config.contextSize);
+      storage.saveHistory(chatId, chatHistory[chatId]);
+      console.log(`[MEMORY] ${chatId}: сжатие не удалось, окно обрезано до ${config.contextSize}`);
+    }
+    return;
+  }
+
+  lastCompressFailedAt.delete(chatId);
+  chatHistory[chatId] = history.slice(chunkSize);
+  storage.saveHistory(chatId, chatHistory[chatId]);
+  storage.addChatMemory(chatId, {
+    createdAt: new Date().toISOString(),
+    from: new Date(chunk[0].at || Date.now()).toISOString(),
+    to: new Date(chunk[chunk.length - 1].at || Date.now()).toISOString(),
+    messages: chunk.length,
+    summary,
+  }, { retentionDays: config.memoryRetentionDays, maxBlocks: config.memoryMaxBlocks });
+  console.log(`[MEMORY] ${chatId}: ${chunk.length} сообщений сжаты в долгую память (всего выжимок: ${storage.countChatMemories(chatId)})`);
+}
+
 async function processMessage(bot, msg) {
     const chatId = msg.chat.id;
     const userId = msg.from?.id;
     if (!userId) return;
+
+    // История чата переживает перезапуск: поднимаем её из хранилища при первом сообщении.
+    if (!chatHistory[chatId]) chatHistory[chatId] = storage.loadHistory(chatId);
 
     // Текст под спойлером не уходит ни в модель, ни в досье участников.
     let text = redactSpoilers(msg.text || msg.caption || "", msg.entities || msg.caption_entities || []);
@@ -658,6 +714,7 @@ async function processMessage(bot, msg) {
   if (command === '/reset') {
     chatHistory[chatId] = [];
     analysisBuffers[chatId] = [];
+    storage.clearChatMemories(chatId);
     return sendRich(bot, chatId, { markdown: "🦉 Окей, всё забыл, ну было и было" }, baseOpts(msg, threadId));
   }
 
@@ -1055,7 +1112,8 @@ async function processMessage(bot, msg) {
         userProfile,
         !isDirectlyCalled,
         chatProfile, // <--- Передаём профиль чата
-        externalContext
+        externalContext,
+        chatMemoryText(chatId)
     );
 
     console.log(`[DEBUG] 2. Ответ от AI получен! Длина: ${aiResponse ? aiResponse.length : "PUSTO"}`);

@@ -8,7 +8,10 @@ function harness() {
   const state = { sent: [], reminders: [], answers: [], summaries: [], parses: [], transcript: 'Обычное сообщение.', muted: false, plan: { kind: 'answer' } };
   const storage = { isBanned: () => false, hasChat: () => true, updateChatName() {}, trackUser() {},
     isTopicMuted: () => state.muted, getProfile: () => ({}), getChatProfile: () => ({ topic: 'test' }),
-    getUserInstruction: () => '', addReminder: (...args) => state.reminders.push(args) };
+    getUserInstruction: () => '', addReminder: (...args) => state.reminders.push(args),
+    loadHistory: () => [], saveHistory: () => {}, getChatMemories: () => [],
+    addChatMemory: () => {}, countChatMemories: () => 0, clearChatMemories: () => {},
+  };
   const ai = {
     transcribeAudio: async () => ({ text: state.transcript }),
     summarizeVoiceTranscript: async text => { state.summaries.push(text); return 'Краткий текст'; },
@@ -30,6 +33,7 @@ function harness() {
     '../utils/privacy': { isForgetMeRequest: () => false }, '../utils/profile-query': {},
     '../utils/commands': {}, '../services/documents': {}, '../utils/reminders': require('../src/utils/reminders'),
     '../utils/interjection': require('../src/utils/interjection'),
+    '../utils/chat-memory': require('../src/utils/chat-memory'),
     '../utils/spoilers': require('../src/utils/spoilers'),
     '../utils/identity': require('../src/utils/identity'),
     '../utils/side-taking': require('../src/utils/side-taking'),

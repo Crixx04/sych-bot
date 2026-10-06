@@ -378,7 +378,7 @@ async extractUrl(url, { full = false } = {}) {
 }
 
 // === ОСНОВНОЙ ОТВЕТ ===
-async getResponse(history, currentMessage, imageBuffer = null, mimeType = "image/jpeg", userInstruction = "", userProfile = null, isSpontaneous = false, chatProfile = null, externalContext = "") {
+async getResponse(history, currentMessage, imageBuffer = null, mimeType = "image/jpeg", userInstruction = "", userProfile = null, isSpontaneous = false, chatProfile = null, externalContext = "", memoryContext = "") {
   this.resetStatsIfNeeded();
   console.log(`[DEBUG AI] getResponse вызван.`);
 
@@ -507,7 +507,7 @@ async getResponse(history, currentMessage, imageBuffer = null, mimeType = "image
   }
 
   // 2. СБОРКА ПРОМПТА
-  const relevantHistory = history.slice(-20); 
+  const relevantHistory = history.slice(-(config.contextSize || 20)); 
   const contextStr = relevantHistory.map(m => `${m.role}: ${m.text}`).join('\n');
   let personalInfo = "";
   let replyContext = "";
@@ -517,6 +517,7 @@ async getResponse(history, currentMessage, imageBuffer = null, mimeType = "image
   
   if (extractedText) personalInfo += extractedText;
   if (researchContext) personalInfo += researchContext;
+  if (memoryContext) personalInfo += memoryContext;
 
   if (userProfile) {
       const score = userProfile.relationship || 50;
@@ -569,12 +570,12 @@ async getResponse(history, currentMessage, imageBuffer = null, mimeType = "image
   }
 
   // 4. FALLBACK (Если API упал или ключа нет)
-  return this.generateViaNative(history, currentMessage, imageBuffer, mimeType, userInstruction, userProfile, isSpontaneous, chatProfile, extractedText, researchContext, researchResult);
+  return this.generateViaNative(history, currentMessage, imageBuffer, mimeType, userInstruction, userProfile, isSpontaneous, chatProfile, extractedText, researchContext, researchResult, memoryContext);
 }
 
 // Helper для Native вызова (чтобы не дублировать код)
-async generateViaNative(history, currentMessage, imageBuffer, mimeType, userInstruction, userProfile, isSpontaneous, chatProfile = null, extractedText = "", researchContext = "", researchResult = null) {
-    const relevantHistory = history.slice(-20);
+async generateViaNative(history, currentMessage, imageBuffer, mimeType, userInstruction, userProfile, isSpontaneous, chatProfile = null, extractedText = "", researchContext = "", researchResult = null, memoryContext = "") {
+    const relevantHistory = history.slice(-(config.contextSize || 20));
     const contextStr = relevantHistory.map(m => `${m.role}: ${m.text}`).join('\n');
 
     // Собираем полную информацию о пользователе (как в основном методе)
@@ -591,6 +592,7 @@ async generateViaNative(history, currentMessage, imageBuffer, mimeType, userInst
 
     if (extractedText) personalInfo += extractedText;
     if (researchContext) personalInfo += researchContext;
+    if (memoryContext) personalInfo += memoryContext;
 
     if (userProfile) {
         const score = userProfile.relationship || 50;
@@ -688,6 +690,16 @@ async runLogicText(promptText) {
         } catch (e) {}
     }
     return null; 
+}
+
+// Сжатие старой переписки в короткую выжимку для долгой памяти чата.
+async summarizeChatChunk(messages) {
+    if (!Array.isArray(messages) || !messages.length) return null;
+    const text = messages.map(m => `${m.role}: ${m.text}`).join('\n').slice(0, 24000);
+    const summary = await this.runLogicText(prompts.chatMemorySummary(text));
+    if (typeof summary !== 'string') return null;
+    const clean = summary.trim().replace(/^```[a-z]*\s*|\s*```$/g, '').trim();
+    return clean ? clean.slice(0, 1500) : null;
 }
 
 async analyzeUserImmediate(lastMessages, currentProfile) {

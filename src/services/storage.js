@@ -3,6 +3,7 @@ const path = require('path');
 
 const DEFAULT_DATA_DIR = path.join(__dirname, '../../data');
 const debounce = require('lodash.debounce');
+const { DEFAULT_RETENTION_DAYS, pruneMemories } = require('../utils/chat-memory');
 
 function cloneDefault(value) {
   return JSON.parse(JSON.stringify(value));
@@ -57,6 +58,7 @@ class StorageService {
       instructions: path.join(this.dataDir, 'instructions.json'),
       profiles: path.join(this.dataDir, 'profiles.json'),
       chatProfiles: path.join(this.dataDir, 'chatProfiles.json'),
+      memory: path.join(this.dataDir, 'memory.json'),
       stats: path.join(this.dataDir, 'stats.json'),
       backups: path.join(this.dataDir, 'backups'),
     };
@@ -71,10 +73,12 @@ class StorageService {
     this.saveDebounced = debounce(this._saveToFile.bind(this), 5000);
     this.saveProfilesDebounced = debounce(this._saveProfilesToFile.bind(this), 5000);
     this.saveChatProfilesDebounced = debounce(this._saveChatProfilesToFile.bind(this), 5000);
+    this.saveMemoriesDebounced = debounce(this._saveMemoriesToFile.bind(this), 5000);
     this.saveStatsDebounced = debounce(this._saveStatsToFile.bind(this), 3000); // Статистика чаще сохраняется
     this.data = { chats: {} };
     this.profiles = {};
     this.chatProfiles = {};
+    this.memories = {};
     this.stats = this._getDefaultStats();
     // Очередь обновлений профилей для предотвращения race condition
     this.profileUpdateQueue = Promise.resolve();
@@ -84,6 +88,7 @@ class StorageService {
     this.ensureFile(this.paths.instructions, '{}');
     this.ensureFile(this.paths.profiles, '{}');
     this.ensureFile(this.paths.chatProfiles, '{}');
+    this.ensureFile(this.paths.memory, '{}');
     this.ensureFile(this.paths.stats, JSON.stringify(this._getDefaultStats()));
 
     // 2. Загружаем данные в память
@@ -180,6 +185,7 @@ class StorageService {
 
     this.profiles = this._readJson(this.paths.profiles, {}, 'profiles.json');
     this.chatProfiles = this._readJson(this.paths.chatProfiles, {}, 'chatProfiles.json');
+    this.memories = this._readJson(this.paths.memory, {}, 'memory.json');
 
     // Грузим статистику
     try {
@@ -272,6 +278,16 @@ class StorageService {
     } catch (e) { console.error("Ошибка записи ChatProfiles:", e); }
   }
 
+  _saveMemoriesToFile() {
+    try {
+      atomicWriteJsonSync(this.paths.memory, this.memories);
+    } catch (e) { console.error("Ошибка записи Memory:", e); }
+  }
+
+  saveMemories() {
+    this.saveMemoriesDebounced();
+  }
+
   _saveStatsToFile() {
     try {
       atomicWriteJsonSync(this.paths.stats, this.stats);
@@ -286,12 +302,59 @@ class StorageService {
     this.saveStatsDebounced();
   }
 
+  // === ДОЛГАЯ ПАМЯТЬ ЧАТА ===
+  // Сжатые выжимки старой переписки. Срок хранения ограничен (по умолчанию 180 дней),
+  // количество блоков на чат тоже — чтобы файл не рос бесконечно.
+  getChatMemories(chatId, { retentionDays = DEFAULT_RETENTION_DAYS, maxBlocks = 40 } = {}) {
+    const key = String(chatId);
+    const list = Array.isArray(this.memories[key]) ? this.memories[key] : [];
+    const fresh = pruneMemories(list, retentionDays);
+    if (fresh.length !== list.length) {
+      this.memories[key] = fresh;
+      this.saveMemories();
+    }
+    return fresh.slice(-maxBlocks);
+  }
+
+  addChatMemory(chatId, entry, { retentionDays = DEFAULT_RETENTION_DAYS, maxBlocks = 40 } = {}) {
+    const key = String(chatId);
+    if (!Array.isArray(this.memories[key])) this.memories[key] = [];
+    this.memories[key].push(entry);
+    this.memories[key] = pruneMemories(this.memories[key], retentionDays).slice(-maxBlocks);
+    this.saveMemories();
+  }
+
+  countChatMemories(chatId) {
+    const key = String(chatId);
+    return Array.isArray(this.memories[key]) ? this.memories[key].length : 0;
+  }
+
+  clearChatMemories(chatId) {
+    delete this.memories[String(chatId)];
+    this.saveMemories();
+  }
+
+  // Живая история чата переживает перезапуск: пишем её в db.json (chats.<id>.history).
+  loadHistory(chatId) {
+    const chat = this.data.chats[String(chatId)];
+    const history = chat && Array.isArray(chat.history) ? chat.history : [];
+    return history.slice(-500);
+  }
+
+  saveHistory(chatId, entries) {
+    const key = String(chatId);
+    if (!this.data.chats[key]) this.data.chats[key] = { mutedTopics: [], users: {}, chatName: null };
+    this.data.chats[key].history = (Array.isArray(entries) ? entries : []).slice(-500);
+    this.save();
+  }
+
   // Принудительное сохранение (для выхода из процесса)
   forceSave() {
     this.saveDebounced.flush();
     this.saveProfilesDebounced.flush();
     this.saveChatProfilesDebounced.flush();
     this.saveStatsDebounced.flush();
+    this.saveMemoriesDebounced.flush();
   }
 
   backupNow({ flush = true } = {}) {
@@ -319,6 +382,7 @@ class StorageService {
         this.paths.instructions,
         this.paths.profiles,
         this.paths.chatProfiles,
+        this.paths.memory,
         this.paths.stats,
       ];
 

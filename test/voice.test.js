@@ -75,6 +75,7 @@ function loadAi({ transcript = 'Уточни адрес, пожалуйста.',
     '../utils/rich': {}, './youtube': {}, './youtube-gemini': {}, '../utils/content-policy': {}, './research': {},
     '../utils/voice': voice,
     '../utils/interjection': require('../src/utils/interjection'),
+    '../utils/chat-memory': require('../src/utils/chat-memory'),
     './speech': { synthesizeSpeech: async () => ({ wav: Buffer.alloc(4), mime: 'audio/L16' }) },
     '../utils/reminders': require('../src/utils/reminders'),
     '../utils/async': { withTimeout: (operation, timeout, label) => {
@@ -387,6 +388,8 @@ test('message handler sends one voice card in the original topic and preserves f
   const result = { text: longTranscript, summary: usefulSummary };
   const handler = loadModule('core/logic.js', {
     '../services/storage': { isBanned: () => false, hasChat: () => true, updateChatName() {},
+      loadHistory: () => [], saveHistory: () => {}, getChatMemories: () => [],
+      addChatMemory: () => {}, countChatMemories: () => 0, clearChatMemories: () => {},
       trackUser() {}, isTopicMuted: () => false, getChatProfile: () => ({ topic: 'test' }) },
     '../services/ai': { transcribeAudio: async () => result, summarizeVoiceTranscript: async (text, speaker) => { speakers.push(speaker); return usefulSummary; } },
     '../config': { adminId: 999, botId: 888, triggerRegex: /сыч|sych/i, contextSize: 30 },
@@ -395,6 +398,7 @@ test('message handler sends one voice card in the original topic and preserves f
     '../utils/privacy': { isForgetMeRequest: () => false }, '../utils/profile-query': {},
     '../utils/commands': {}, '../services/documents': {},
     '../utils/interjection': require('../src/utils/interjection'),
+    '../utils/chat-memory': require('../src/utils/chat-memory'),
     '../utils/spoilers': require('../src/utils/spoilers'),
     '../utils/identity': require('../src/utils/identity'),
     '../utils/side-taking': require('../src/utils/side-taking'),

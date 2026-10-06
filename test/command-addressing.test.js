@@ -42,6 +42,8 @@ function loadHandler() {
     trackUser: () => {},
     isTopicMuted: () => false,
     toggleMute: (chat, thread) => { effects.push({ chat, thread }); return true; },
+    loadHistory: () => [], saveHistory: () => {}, getChatMemories: () => [],
+    addChatMemory: () => {}, countChatMemories: () => 0, clearChatMemories: () => {},
   };
   const dependencies = {
     '../services/storage': storage,
@@ -54,6 +56,7 @@ function loadHandler() {
     '../utils/profile-query': {},
     '../utils/commands': { resolveAddressedCommand },
     '../utils/interjection': require('../src/utils/interjection'),
+    '../utils/chat-memory': require('../src/utils/chat-memory'),
     '../utils/spoilers': require('../src/utils/spoilers'),
     '../utils/identity': require('../src/utils/identity'),
     '../utils/side-taking': require('../src/utils/side-taking'),

@@ -13,7 +13,10 @@ function harness({ chance = 1, cooldownMs = 15 * 60 * 1000, random = () => 0, re
   const nextScore = () => (scores.length > 1 ? scores.shift() : scores[0]);
   const storage = { isBanned: () => false, hasChat: () => true, updateChatName() {}, trackUser() {},
     isTopicMuted: () => false, getProfile: () => ({}), getChatProfile: () => ({ topic: 'test' }),
-    getUserInstruction: () => '' };
+    getUserInstruction: () => '',
+    loadHistory: () => [], saveHistory: () => {}, getChatMemories: () => [],
+    addChatMemory: () => {}, countChatMemories: () => 0, clearChatMemories: () => {},
+  };
   const ai = {
     getResponse: async (history, input, image, mime, instruction, profile, isSpontaneous) => {
       state.answers.push({ input, isSpontaneous, instruction, history: [...history] });
@@ -56,6 +59,7 @@ function harness({ chance = 1, cooldownMs = 15 * 60 * 1000, random = () => 0, re
     '../services/documents': {},
     '../utils/reminders': require('../src/utils/reminders'),
     '../utils/interjection': require('../src/utils/interjection'),
+    '../utils/chat-memory': require('../src/utils/chat-memory'),
     '../utils/spoilers': require('../src/utils/spoilers'),
     '../utils/identity': require('../src/utils/identity'),
     '../utils/side-taking': require('../src/utils/side-taking'),
