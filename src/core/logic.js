@@ -834,7 +834,9 @@ async function processMessage(bot, msg) {
   // Пороги — в config.js (.env: REACTION_CHANCE, SPONTANEOUS_CHANCE,
   // SPONTANEOUS_COOLDOWN_MIN, SPONTANEOUS_MAX_CHARS).
   // В business-переписках молчим: там бот работает ассистентом, а не участником чата.
-  if (!shouldAnswer && !isReplyToBot && !msg.business_connection_id && text.length > MIN_MESSAGE_CHARS) {
+  // Порог длины настраиваемый: INTERJECTION_MIN_CHARS в .env (по умолчанию 10 символов).
+  const minInterjectionChars = config.interjectionMinChars || MIN_MESSAGE_CHARS;
+  if (!shouldAnswer && !isReplyToBot && !msg.business_connection_id && text.length > minInterjectionChars) {
 
     // Берем контекст (последние 15 сообщений), чтобы реакция была в тему
     const historyBlock = (chatHistory[chatId] || []).slice(-15).map(m => `${m.role}: ${m.text}`).join('\n');

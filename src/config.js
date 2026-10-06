@@ -113,6 +113,10 @@ module.exports = {
   // выключает поиск именно для спонтанных реплик.
   spontaneousSearch: process.env.SPONTANEOUS_SEARCH !== 'false',
 
+  // Минимальная длина чужого сообщения, на которое бот вообще рассматривает влезание.
+  // Короткие «ок», «+», «ага» отсекаются этим порогом.
+  interjectionMinChars: positiveNumber(process.env.INTERJECTION_MIN_CHARS, 10),
+
   // Выключать «размышление» у моделей на механических задачах (JSON, оценки, реакции).
   // Иначе размышляющая модель тратит лимит токенов на мысли и отдаёт пустой ответ.
   disableThinking: process.env.AI_DISABLE_THINKING !== 'false',
