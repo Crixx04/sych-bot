@@ -67,10 +67,11 @@ module.exports = {
 
   // === GEMINI NATIVE (FALLBACK / SEARCH) ===
   geminiKeys: geminiKeys,
-  googleNativeModel: 'gemini-2.5-flash-lite', 
-  voiceFallbackModel: process.env.VOICE_FALLBACK_MODEL || 'gemini-2.5-flash',
+  // Модели Google тоже настраиваемые: Google выводит старые из эксплуатации без предупреждения.
+  googleNativeModel: process.env.GOOGLE_NATIVE_MODEL || 'gemini-3.5-flash-lite', 
+  voiceFallbackModel: process.env.VOICE_FALLBACK_MODEL || 'gemini-3.5-flash',
   voiceSummaryTimeoutMs: positiveNumber(process.env.VOICE_SUMMARY_TIMEOUT_SECONDS, 45) * 1000,
-  fallbackModelName: 'gemini-2.5-flash-lite',
+  fallbackModelName: process.env.FALLBACK_MODEL || 'gemini-3.5-flash-lite',
   contextSize: 30,
 
   // === ПОТОЛОК ВЫВОДА МОДЕЛИ ===
