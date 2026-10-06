@@ -23,6 +23,7 @@ const { shouldSkipSearchForPrimarySource, isVerificationRequest } = require('../
 const { research, evidenceContext, publicUrl, answerAuditPrompt, conservativeAnswer, citedProviderSources } = require('./research');
 const { withTimeout } = require('../utils/async');
 const { parseVoiceJson, readTranscript, shouldSummarizeVoice, selectVoiceSummary } = require('../utils/voice');
+const { parseScore } = require('../utils/interjection');
 const { resolveReminderDecision, isRecallQuestion } = require('../utils/reminders');
 
 const YOUTUBE_TRANSCRIPT_TIMEOUT_MS = 25000;
@@ -737,6 +738,13 @@ async determineReaction(contextText) {
   if (!text) return null;
   const match = text.match(/(\p{Emoji_Presentation}|\p{Extended_Pictographic})/u);
   return (match && allowed.includes(match[0])) ? match[0] : null;
+}
+
+// Оценка 0..10: достойно ли сообщение того, чтобы бот влез со своей репликой.
+// Дешёвый вызов модели-логики без поиска — цена вмешательства остаётся копеечной.
+async rateInterjectionInterest(contextText) {
+  const text = await this.runLogicText(prompts.interjectionScore(contextText));
+  return parseScore(text);
 }
 
 async generateProfileDescription(profileData, targetName) {

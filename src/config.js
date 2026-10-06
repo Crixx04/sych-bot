@@ -12,6 +12,13 @@ function ratio(value, fallback) {
   return Math.min(Math.max(parsed, 0), 1);
 }
 
+// Целое в заданных границах — для порогов вроде оценки 0..10.
+function boundedInt(value, fallback, min, max) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, min), max);
+}
+
 
 // Собираем ключи для Native Google (Fallback или Search)
 const geminiKeys = [];
@@ -89,8 +96,11 @@ module.exports = {
   officeExpandedMaxBytes: Math.floor(positiveNumber(process.env.OFFICE_EXPANDED_MAX_MB, 32) * 1024 * 1024),
 
   // === СПОНТАННАЯ АКТИВНОСТЬ В ЧАТЕ ===
-  // Шанс влезть в разговор самому, без обращения по имени: 0.05 = 5% подходящих сообщений.
-  spontaneousChance: ratio(process.env.SPONTANEOUS_CHANCE, 0.05),
+  // Допуск случайности: какая доля подходящих сообщений доходит до оценки моделью.
+  // 0.25 = четверть. Само решение о влезании принимает оценка ниже (spontaneousThreshold).
+  spontaneousChance: ratio(process.env.SPONTANEOUS_CHANCE, 0.25),
+  // Порог оценки 0..10: ниже него бот не влезает, даже если допуск выпал.
+  spontaneousThreshold: boundedInt(process.env.SPONTANEOUS_THRESHOLD, 8, 0, 10),
   // Минимальная пауза между спонтанными репликами в одном чате, минуты.
   spontaneousCooldownMs: positiveNumber(process.env.SPONTANEOUS_COOLDOWN_MIN, 15) * 60 * 1000,
   // Потолок длины спонтанной реплики, символы.
