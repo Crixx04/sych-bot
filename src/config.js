@@ -108,6 +108,11 @@ module.exports = {
   spontaneousCooldownMs: positiveNumber(process.env.SPONTANEOUS_COOLDOWN_MIN, 15) * 60 * 1000,
   // Потолок длины спонтанной реплики, символы.
   spontaneousMaxChars: Math.floor(positiveNumber(process.env.SPONTANEOUS_MAX_CHARS, 300)),
+  // Разрешение искать в интернете по своей инициативе: не только по просьбе, но и когда
+  // бот сам приводит аргумент в споре или короткой реплике. SPONTANEOUS_SEARCH=false
+  // выключает поиск именно для спонтанных реплик.
+  spontaneousSearch: process.env.SPONTANEOUS_SEARCH !== 'false',
+
   // Шанс одиночной эмодзи-реакции на чужое сообщение (раньше было зашито 0.015).
   reactionChance: ratio(process.env.REACTION_CHANCE, 0.015),
   // === ОЗВУЧКА (Gemini TTS) ===

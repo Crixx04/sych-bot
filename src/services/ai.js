@@ -380,7 +380,10 @@ async getResponse(history, currentMessage, imageBuffer = null, mimeType = "image
   let extractedText = externalContext || "";
   let youtubeFallbackQuery = null;
   const urlM = (currentMessage.text || '').match(/https?:\/\/[^\s)]+/);
-  if (!isSpontaneous && urlM && !/\.(jpg|jpeg|png|webp|gif|bmp)(\?|$)/i.test(urlM[0])) {
+  // Читать страницу по ссылке и искать в интернете бот может и по своей инициативе
+  // (в спонтанной реплике тоже), если это не выключено настройкой spontaneousSearch.
+  const canSearch = !isSpontaneous || config.spontaneousSearch;
+  if (canSearch && urlM && !/\.(jpg|jpeg|png|webp|gif|bmp)(\?|$)/i.test(urlM[0])) {
       const rest = currentMessage.text.replace(urlM[0], '').trim();
       const wantsRead = rest.length < 80 || /перескаж|статья|статью|ссылк|прочит|разбер|что (там|тут|пишут|по этой)|открой|резюм|tl;?dr|о чём|кратко|суть/i.test(currentMessage.text.toLowerCase());
       if (wantsRead) {
@@ -453,11 +456,11 @@ async getResponse(history, currentMessage, imageBuffer = null, mimeType = "image
       currentMessage.text,
       Boolean(extractedText)
   );
-  const searchDecision = isSpontaneous
+  const searchDecision = (isSpontaneous && !config.spontaneousSearch)
       ? {
           needsSearch: false,
           searchQuery: null,
-          reason: "спонтанная реплика — поиск не запускаем",
+          reason: "спонтанная реплика — поиск выключен настройкой",
         }
       : youtubeFallbackQuery
       ? {
