@@ -113,6 +113,10 @@ module.exports = {
   // выключает поиск именно для спонтанных реплик.
   spontaneousSearch: process.env.SPONTANEOUS_SEARCH !== 'false',
 
+  // Выключать «размышление» у моделей на механических задачах (JSON, оценки, реакции).
+  // Иначе размышляющая модель тратит лимит токенов на мысли и отдаёт пустой ответ.
+  disableThinking: process.env.AI_DISABLE_THINKING !== 'false',
+
   // Шанс одиночной эмодзи-реакции на чужое сообщение (раньше было зашито 0.015).
   reactionChance: ratio(process.env.REACTION_CHANCE, 0.015),
   // === ОЗВУЧКА (Gemini TTS) ===
